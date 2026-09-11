@@ -2,53 +2,135 @@ from __future__ import annotations
 
 import argparse
 import logging
-import threading
-from typing import Literal
+from pathlib import Path
 
-from npb_rpc import portable_ipc
+try:
+    import zmq
+except ImportError:  # Only needed for ZeroMQ IPC capability detection.
+    zmq = None
 
-from rpcapi import *
-from server import *
+from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
 
-LOG = logging.getLogger("nng_dai_camera")
-STOP = threading.Event()
+try:
+    from .msg import CameraFrameRequest, CameraFrameSetRequest
+    from .rpcapi import (
+        client_camera_frame,
+        client_camera_frame_set,
+        client_camera_status,
+        resolve_service_instance,
+    )
+    from .server import run_server
+except ImportError:  # Support `python cli.py ...` from this directory.
+    from msg import CameraFrameRequest, CameraFrameSetRequest
+    from rpcapi import (
+        client_camera_frame,
+        client_camera_frame_set,
+        client_camera_status,
+        resolve_service_instance,
+    )
+    from server import run_server
 
-TCP_ENDPOINT = "tcp://127.0.0.1:5556"
-IPC_ENDPOINT = portable_ipc("npb-rpc-dai-camera")
+
+LOG = logging.getLogger("dai_camera")
 VALID_STREAMS = ("rgb", "left", "right")
+DEFAULT_SERVICE = "camera"
 
 
-def run_client(endpoint: str, stream: Literal["rgb", "left", "right"], thumbnail: bool, single: bool) -> None:
-    status = client_camera_status(endpoint=endpoint)
+def endpoint_for(
+    backend: str,
+    transport: str,
+    name: str,
+    host: str = "127.0.0.1",
+) -> str:
+    """Build a portable per-instance endpoint, matching the discovery example."""
+    if transport == "tcp":
+        return portable_tcp(name, host=host)
+    if backend == "zmq":
+        if zmq is None:
+            raise SystemExit(
+                "ZeroMQ backend requested but pyzmq is not installed. "
+                "Install pyzmq, or use --backend nng."
+            )
+        if not zmq.has("ipc"):
+            raise SystemExit(
+                "This libzmq build does not support ipc://. "
+                "Use --transport tcp or --backend nng."
+            )
+    return portable_ipc(name)
+
+
+def _client_target_kwargs(
+    args: argparse.Namespace,
+    discovery: FilesystemDiscovery,
+) -> dict[str, object]:
+    if args.endpoint:
+        return {
+            "endpoint": args.endpoint,
+            "backend": args.backend,
+        }
+    return {
+        "discovery": discovery,
+        "service": args.service,
+        "server_name": args.server_name,
+    }
+
+
+def run_client(
+    args: argparse.Namespace,
+    discovery: FilesystemDiscovery,
+) -> None:
+    target = _client_target_kwargs(args, discovery)
+
+    if args.endpoint:
+        print(f"connecting directly via {args.backend} at {args.endpoint}")
+    elif args.server_name:
+        instance = resolve_service_instance(
+            discovery,
+            args.service,
+            args.server_name,
+        )
+        print(
+            f"connecting to {instance.instance_id!r} via {instance.backend} "
+            f"at {instance.endpoint}"
+        )
+    else:
+        print(
+            f"discovering a healthy instance of {args.service!r}; "
+            f"registry: {discovery.root}"
+        )
+
+    status = client_camera_status(**target)
     print(
         "status:",
         f"online={status.online}",
         f"generation={status.generation}",
         f"restarts={status.restart_count}",
         f"published={status.frames_published}",
+        f"last_frame_ns={status.last_frame_ns}",
         f"error={status.error!r}",
     )
 
-    if single:
+    if args.single:
         # Backward-compatible diagnostic path for one stream.
         frame = client_camera_frame(
-            CameraFrameRequest(stream=stream, thumbnail=thumbnail),
-            endpoint=endpoint,
+            CameraFrameRequest(stream=args.stream, thumbnail=args.thumbnail),
+            **target,
         )
         if not frame.ok:
             print(f"frame unavailable: {frame.error}")
             return
-        suffix = "_thumbnail" if thumbnail else ""
-        path = f"{stream}{suffix}.jpg"
+        suffix = "_thumbnail" if args.thumbnail else ""
+        path = f"{args.stream}{suffix}.jpg"
         with open(path, "wb") as f:
             f.write(frame.jpeg.tobytes())
         print(
             f"wrote {path}: {frame.jpeg.nbytes} bytes, "
-            f"seq={frame.sequence}, online={frame.camera_online}"
+            f"seq={frame.sequence}, online={frame.camera_online}, "
+            f"captured_ns={frame.captured_ns}"
         )
         return
 
-    frames = client_camera_frame_set(CameraFrameSetRequest(), endpoint=endpoint)
+    frames = client_camera_frame_set(CameraFrameSetRequest(), **target)
     print(
         "frame-set:",
         f"ok={frames.ok}",
@@ -93,23 +175,64 @@ def run_client(endpoint: str, stream: Literal["rgb", "left", "right"], thumbnail
         )
 
 
-def endpoint_for(transport: str) -> str:
-    return {"tcp": TCP_ENDPOINT, "ipc": IPC_ENDPOINT}[transport]
+def show_services(discovery: FilesystemDiscovery) -> None:
+    services = discovery.list_services()
+    if not services:
+        print("no healthy services")
+        return
+    for service in services:
+        print(f"{service}:")
+        for instance in discovery.list_instances(service):
+            print(
+                f"  {instance.instance_id}  "
+                f"{instance.backend}  {instance.endpoint}  "
+                f"{instance.hostname} pid={instance.pid}"
+            )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Fault-tolerant NNG DepthAI camera")
-    parser.add_argument("role", choices=("server", "client"))
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Fault-tolerant discovered DepthAI camera RPC service"
+    )
+    parser.add_argument("role", choices=("server", "client", "list"))
+    parser.add_argument("--service", default=DEFAULT_SERVICE)
+    parser.add_argument(
+        "--server-name",
+        help="instance id to advertise (server) or select (client)",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=("nng", "zmq"),
+        default="nng",
+        help="server backend, or direct-client backend (default: nng)",
+    )
     parser.add_argument(
         "--transport",
         choices=("tcp", "ipc"),
         default="ipc",
-        help="NNG transport when --endpoint is not supplied (default: ipc)",
+        help="server transport when --endpoint is not supplied (default: ipc)",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="TCP bind host used by portable_tcp (default: 127.0.0.1)",
     )
     parser.add_argument(
         "--endpoint",
         default=None,
-        help="override NNG endpoint, e.g. tcp://0.0.0.0:5556",
+        help=(
+            "server bind endpoint override; for clients, bypass discovery and "
+            "connect directly to this endpoint"
+        ),
+    )
+    parser.add_argument(
+        "--advertise-endpoint",
+        help="endpoint stored in discovery when it differs from the bind endpoint",
+    )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        help="filesystem discovery registry directory",
     )
     parser.add_argument(
         "--reconnect-delay",
@@ -125,18 +248,45 @@ def main() -> None:
         help="use legacy camera.get_frame instead of fetching all six images",
     )
     parser.add_argument("--log-level", default="INFO")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(threadName)s: %(message)s",
     )
-    endpoint = args.endpoint or endpoint_for(args.transport)
+
+    discovery = FilesystemDiscovery(args.registry)
 
     if args.role == "server":
-        run_server(endpoint, args.reconnect_delay)
+        server_name = args.server_name or args.service
+        endpoint = args.endpoint or endpoint_for(
+            args.backend,
+            args.transport,
+            server_name,
+            args.host,
+        )
+        print(
+            f"serving {args.service!r} as {server_name!r} via {args.backend} "
+            f"at {endpoint}; registry: {discovery.root}"
+        )
+        run_server(
+            endpoint,
+            args.reconnect_delay,
+            backend=args.backend,
+            discovery=discovery,
+            service=args.service,
+            instance_id=server_name,
+            advertise_endpoint=args.advertise_endpoint,
+        )
+    elif args.role == "client":
+        run_client(args, discovery)
     else:
-        run_client(endpoint, args.stream, args.thumbnail, args.single)
+        show_services(discovery)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fault-tolerant DepthAI MJPEG camera server over npb_rpc/NNG.
+"""Fault-tolerant DepthAI MJPEG camera server over npb_rpc.
 
-The NNG RPC server and the camera capture loop have deliberately separate
-lifetimes.  A DepthAI startup/read/disconnect error only restarts the camera
-worker; it must not terminate the NNG server.
+The RPC server and the camera capture loop have deliberately separate lifetimes.
+A DepthAI startup/read/disconnect error only restarts the camera worker; it must
+not terminate the RPC server. The server can run directly or advertise itself
+through FilesystemDiscovery, using either NNG or ZeroMQ.
 """
 
 from __future__ import annotations
@@ -17,11 +18,34 @@ from typing import Any, Literal
 
 import depthai as dai
 import numpy as np
-from npb_rpc import NngRpcServer, RpcContext
+from npb_rpc import (
+    DiscoveredRpcServer,
+    FilesystemDiscovery,
+    NngRpcServer,
+    RpcContext,
+    ZmqRpcServer,
+)
 
 from depthai_camera_stream import CameraStream
 
-from msg import *
+try:
+    from .msg import (
+        CameraFrameRequest,
+        CameraFrameResponse,
+        CameraFrameSetRequest,
+        CameraFrameSetResponse,
+        CameraStatusResponse,
+        EmptyRequest,
+    )
+except ImportError:  # Support running the files directly from one directory.
+    from msg import (
+        CameraFrameRequest,
+        CameraFrameResponse,
+        CameraFrameSetRequest,
+        CameraFrameSetResponse,
+        CameraStatusResponse,
+        EmptyRequest,
+    )
 
 
 LOG = logging.getLogger("nng_dai_camera")
@@ -286,8 +310,21 @@ def _empty_frame_response(error: str) -> CameraFrameSetResponse:
     )
 
 
-def make_server(endpoint: str, camera: CameraSupervisor) -> NngRpcServer:
-    server = NngRpcServer.bind(endpoint)
+def make_server(
+    endpoint: str,
+    camera: CameraSupervisor,
+    *,
+    backend: str = "nng",
+):
+    """Create a backend-specific RPC server and register the camera methods."""
+    if backend == "nng":
+        server_type = NngRpcServer
+    elif backend == "zmq":
+        server_type = ZmqRpcServer
+    else:
+        raise ValueError(f"unsupported RPC backend: {backend!r}")
+
+    server = server_type.bind(endpoint)
 
     @server.method(
         "camera.status",
@@ -468,7 +505,18 @@ def make_server(endpoint: str, camera: CameraSupervisor) -> NngRpcServer:
     return server
 
 
-def run_server(endpoint: str, reconnect_delay: float) -> None:
+def run_server(
+    endpoint: str,
+    reconnect_delay: float,
+    *,
+    backend: str = "nng",
+    discovery: FilesystemDiscovery | None = None,
+    service: str = "camera",
+    instance_id: str | None = None,
+    advertise_endpoint: str | None = None,
+) -> None:
+    """Run the resilient camera service, optionally registered for discovery."""
+    STOP.clear()
     camera = CameraSupervisor(
         DaiStereoCameraStream(),
         reconnect_delay=reconnect_delay,
@@ -478,21 +526,41 @@ def run_server(endpoint: str, reconnect_delay: float) -> None:
     try:
         # Camera errors are handled by CameraSupervisor. This outer loop additionally
         # prevents an unexpected transport/server exception from permanently ending
-        # the service; it re-binds after a short delay.
+        # the service; it re-binds and re-registers after a short delay.
         while not STOP.is_set():
             try:
-                server = make_server(endpoint, camera)
-                LOG.info("NNG camera server listening on %s", endpoint)
+                raw_server = make_server(endpoint, camera, backend=backend)
+                if discovery is None:
+                    server = raw_server
+                else:
+                    server = DiscoveredRpcServer(
+                        service,
+                        raw_server,
+                        discovery,
+                        instance_id=instance_id or service,
+                        advertise_endpoint=advertise_endpoint,
+                    )
+
+                LOG.info(
+                    "%s camera server listening on %s%s",
+                    backend.upper(),
+                    endpoint,
+                    (
+                        f" as {instance_id or service!r} for service {service!r}"
+                        if discovery is not None
+                        else ""
+                    ),
+                )
                 with server:
                     server.serve_forever()
                 if not STOP.is_set():
-                    raise RuntimeError("NNG serve_forever returned unexpectedly")
+                    raise RuntimeError("RPC serve_forever returned unexpectedly")
             except KeyboardInterrupt:
                 STOP.set()
             except Exception:
                 if STOP.is_set():
                     break
-                LOG.exception("NNG server failed; restarting")
+                LOG.exception("RPC server failed; restarting")
                 STOP.wait(1.0)
     finally:
         camera.close()
