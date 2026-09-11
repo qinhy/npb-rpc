@@ -17,7 +17,7 @@ from ._errors import (
     RpcTransportError,
     ServiceNotFoundError,
 )
-from ._nng import NngRpcClient, NngRpcServer, portable_ipc
+from ._nng import NngRpcClient, NngRpcServer, portable_ipc, portable_tcp
 from ._protocol import PROTOCOL_VERSION, RpcContext, Status
 from ._service import DiscoveredRpcClient, DiscoveredRpcServer
 from ._zmq import ZmqRpcClient, ZmqRpcServer
@@ -45,5 +45,6 @@ __all__ = [
     "ZmqRpcClient",
     "ZmqRpcServer",
     "portable_ipc",
+    "portable_tcp",
     "validate_service_name",
 ]

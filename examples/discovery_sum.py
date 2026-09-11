@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -12,10 +11,13 @@ from npb_rpc import (
     DiscoveredRpcClient,
     DiscoveredRpcServer,
     FilesystemDiscovery,
+    NngRpcClient,
     NngRpcServer,
     RpcContext,
+    ZmqRpcClient,
     ZmqRpcServer,
     portable_ipc,
+    portable_tcp,
 )
 
 
@@ -29,29 +31,28 @@ class SumResponse(BinaryModel):
     total: float
 
 
-def default_endpoint(backend: str, transport: str) -> str:
-    if backend == "zmq":
-        if transport == "tcp":
-            return "tcp://127.0.0.1:5560"
-        if not zmq.has("ipc"):
-            raise SystemExit(
-                "This libzmq build does not support ipc://. "
-                "Use --transport tcp or --backend nng on native Windows."
-            )
-        socket_path = Path(tempfile.gettempdir()).resolve() / "npb-rpc-discovery-zmq.sock"
-        return f"ipc://{socket_path}"
+def endpoint_for(backend: str, transport: str, name: str,
+        host: str = "127.0.0.1") -> str:
     if transport == "tcp":
-        return "tcp://127.0.0.1:5561"
-    return portable_ipc("npb-rpc-discovery-sum")
+        return portable_tcp(name, host=host)
+    if backend == "zmq" and not zmq.has("ipc"):
+        raise SystemExit(
+            "This libzmq build does not support ipc://. "
+            "Use --transport tcp or --backend nng on native Windows."
+        )
+    return portable_ipc(name)
 
 
 def run_server(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None:
-    endpoint = args.endpoint or default_endpoint(args.backend, args.transport)
+    server_name = args.server_name or args.service
+    endpoint = args.endpoint or endpoint_for(
+        args.backend, args.transport, server_name, args.host)
     server_type = ZmqRpcServer if args.backend == "zmq" else NngRpcServer
     server = DiscoveredRpcServer(
         args.service,
         server_type.bind(endpoint),
         discovery,
+        instance_id=server_name,
         advertise_endpoint=args.advertise_endpoint,
     )
 
@@ -60,21 +61,37 @@ def run_server(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None
         return SumResponse(total=float(request.values.sum()))
 
     print(
-        f"serving {args.service!r} via {args.backend} at {server.endpoint}; "
-        f"registry: {discovery.root}"
+        f"serving {args.service!r} as {server_name!r} via {args.backend} "
+        f"at {server.endpoint}; registry: {discovery.root}"
     )
     with server:
         server.serve_forever()
 
 
 def run_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None:
-    with DiscoveredRpcClient(discovery) as client:
-        response = client.call(
-            args.service,
-            "array.sum",
-            SumRequest(values=np.arange(1_000_000, dtype=np.float32)),
-            SumResponse,
+    request = SumRequest(values=np.arange(1_000_000, dtype=np.float32))
+
+    if args.server_name:
+        instances = discovery.list_instances(args.service)
+        matches = [x for x in instances if x.instance_id == args.server_name]
+        if not matches:
+            raise SystemExit(f"server {args.server_name!r} not found")
+        if len(matches) > 1:
+            raise SystemExit(f"server {args.server_name!r} is ambiguous")
+
+        instance = matches[0]
+        client_type = ZmqRpcClient if instance.backend == "zmq" else NngRpcClient
+        print(
+            f"connecting to {instance.instance_id!r} via {instance.backend} "
+            f"at {instance.endpoint}"
         )
+        with client_type.connect(instance.endpoint) as client:
+            response = client.call("array.sum", request, SumResponse)
+    else:
+        with DiscoveredRpcClient(discovery) as client:
+            response = client.call(
+                args.service, "array.sum", request, SumResponse)
+
     print(response.total)
 
 
@@ -87,8 +104,9 @@ def show_services(discovery: FilesystemDiscovery) -> None:
         print(f"{service}:")
         for instance in discovery.list_instances(service):
             print(
-                f"  {instance.instance_id}  {instance.backend}  "
-                f"{instance.endpoint}  {instance.hostname} pid={instance.pid}"
+                f"  {instance.instance_id}  "
+                f"{instance.backend}  {instance.endpoint}  "
+                f"{instance.hostname} pid={instance.pid}"
             )
 
 
@@ -96,8 +114,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the service discovery example")
     parser.add_argument("role", choices=("server", "client", "list"))
     parser.add_argument("--service", default="sum")
+    parser.add_argument("--server-name")
     parser.add_argument("--backend", choices=("zmq", "nng"), default="zmq")
     parser.add_argument("--transport", choices=("tcp", "ipc"), default="tcp")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--endpoint", help="server bind endpoint override")
     parser.add_argument(
         "--advertise-endpoint",
