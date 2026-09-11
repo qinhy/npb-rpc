@@ -154,6 +154,40 @@ wheels = [
 ]
 
 [[package]]
+name = "dai"
+version = "0.3.75"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-ddp" },
+    { name = "sh" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a3/3d/b05d185ae3c11bad324be3c65c2bf8ddbb8044fe1f346f2331a782d0336b/dai-0.3.75.tar.gz", hash = "sha256:fb4198ad8618628cb976c4ab004d408286c5f2657dbe57de9ffc8e132c8d5916", size = 27491, upload-time = "2017-02-10T09:45:19.784Z" }
+
+[[package]]
+name = "depthai"
+version = "3.10.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0e/f8/7d3aceef36304ca7cad0e401645ca2e577e31f373da110595e0b20983b0a/depthai-3.10.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-macosx_11_0_arm64.whl", hash = "sha256:1913158a32fdcd05c84e3bf11c9f8f209a4cb9b69f7a80bbec97f9c714d48c2a", size = 67203827, upload-time = "2026-09-02T04:39:06.74Z" },
+    { url = "https://files.pythonhosted.org/packages/78/c6/c1f39dfcbb31e4890295cf1801309fbff42fd786d2cb2416c79d2928d160/depthai-3.10.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-macosx_11_0_x86_64.whl", hash = "sha256:121e2b3592eb4951480f160a9408d516ece6a5852de0dbfd7f233d98fc41d2c3", size = 70821955, upload-time = "2026-09-02T04:39:10.791Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/c7/0743ac1121036fb566d261223e6fc4707a30698790350c9093f7102f1db0/depthai-3.10.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-manylinux_2_28_aarch64.whl", hash = "sha256:acc7e09f7608e2742c3fde466c90230c85ae8b49328148e3d90935a18b6b5eb6", size = 82579808, upload-time = "2026-09-02T04:39:14.622Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/c8/ddbd078b6bad9c814a58e542c8ebe71ce2f2050caae7760e6f5021cacb24/depthai-3.10.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-manylinux_2_28_x86_64.whl", hash = "sha256:82bf7e03f906c9447ffd516b717cdf707ce72429845b0ee76800b2406a011514", size = 88153472, upload-time = "2026-09-02T04:39:19.159Z" },
+    { url = "https://files.pythonhosted.org/packages/47/09/e6f9a372aef90bc876a4eebf83a7a3c5275c9100b21c9c87410ca00f3e3d/depthai-3.10.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-win_amd64.whl", hash = "sha256:ae5dbc7be1a6a14bf1f4c9a6ce0102677c419949e43e1cdeec5693ce652c0b11", size = 71010079, upload-time = "2026-09-02T04:39:23.344Z" },
+]
+
+[[package]]
+name = "depthai-camera-stream"
+version = "0.2.0"
+source = { git = "https://github.com/qinhy/depthai-camera-stream#967b541e21d1ff5220da500241352f3afcca9966" }
+dependencies = [
+    { name = "depthai" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "https://pypi.org/simple" }
@@ -197,6 +231,15 @@ wheels = [
 ]
 
 [[package]]
+name = "meteor-ejson"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/d5/44601c299c057469a698ebaf8d2523ec167769102989cb430345730717ac/meteor-ejson-1.1.0.tar.gz", hash = "sha256:17c10d00ae4ed4ab8daf3b1e18f1bbe46803058cb6ff81d9d5a73ae6b565224a", size = 2292, upload-time = "2015-08-30T08:45:06.113Z" }
+
+[[package]]
 name = "npb"
 version = "0.3.1"
 source = { git = "https://github.com/qinhy/npb#e61f1679aae6dfb7dedf80a15e3d00e238ddfbbc" }
@@ -211,6 +254,8 @@ name = "npb-rpc"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dai" },
+    { name = "depthai-camera-stream" },
     { name = "npb" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -237,6 +282,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dai", specifier = ">=0.3.75" },
+    { name = "depthai-camera-stream", git = "https://github.com/qinhy/depthai-camera-stream" },
     { name = "npb", git = "https://github.com/qinhy/npb" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -558,6 +605,36 @@ wheels = [
 ]
 
 [[package]]
+name = "pyee"
+version = "13.0.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.12'",
+]
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/04/e7c1fe4dc78a6fdbfd6c337b1c3732ff543b8a397683ab38378447baa331/pyee-13.0.1.tar.gz", hash = "sha256:0b931f7c14535667ed4c7e0d531716368715e860b988770fc7eb8578d1f67fc8", size = 31655, upload-time = "2026-02-14T21:12:28.044Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/c4/b4d4827c93ef43c01f599ef31453ccc1c132b353284fc6c87d535c233129/pyee-13.0.1-py3-none-any.whl", hash = "sha256:af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228", size = 15659, upload-time = "2026-02-14T21:12:26.263Z" },
+]
+
+[[package]]
+name = "pyee"
+version = "14.0.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.12'",
+]
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1d/f1/fdedc2c75c3e31a330659c85e5793bb18b3397981fbf0844c6dee5b18926/pyee-14.0.0.tar.gz", hash = "sha256:76dd0f4314ecd27f02dc73589dea7fd3853f9b6176d8ef9b122860657e3602de", size = 98760, upload-time = "2026-08-13T04:26:11.021Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/12/5347938b1f9a6453f0dbdfcc3e2388a1320ef9b9ec17fbefbc4ab647ea98/pyee-14.0.0-py3-none-any.whl", hash = "sha256:3ac2d3229a9677f7de2c33d7f52fe25b638a46b19c413fea2edc8c6d0a644e4d", size = 15553, upload-time = "2026-08-13T04:26:09.916Z" },
+]
+
+[[package]]
 name = "pygments"
 version = "2.21.0"
 source = { registry = "https://pypi.org/simple" }
@@ -630,6 +707,18 @@ sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa
 wheels = [
     { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
 ]
+
+[[package]]
+name = "python-ddp"
+version = "0.1.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "meteor-ejson" },
+    { name = "pyee", version = "13.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "pyee", version = "14.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "ws4py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/94/80/57c61ed3a7cab01618290ee48f173da9fb8671f2dc90e8a9c8d25ed44456/python-ddp-0.1.5.tar.gz", hash = "sha256:1420f23e89c4ac378ba2f4b311ddcd032e0f0af4f79f8b0829cfad972d2e588f", size = 6032, upload-time = "2015-04-04T00:59:05.032Z" }
 
 [[package]]
 name = "pyzmq"
@@ -721,6 +810,24 @@ wheels = [
 ]
 
 [[package]]
+name = "sh"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/c8/137093889a8b8c9a66c9b46079cf2a0e155a8be027df212a4041e3b7b09c/sh-2.4.0.tar.gz", hash = "sha256:a250aef68509ed93419c9a1d90b0647cd5cbe26107ba94d3717ef5b6d595ffd9", size = 136950, upload-time = "2026-07-25T21:44:42.705Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/dd/6b9aceecddbb3df894003d6a5005bd90bce3cf4743c28c406ebecc8d80f6/sh-2.4.0-py3-none-any.whl", hash = "sha256:98eba32eeb5ecdd310668737d7461e668afc42b273550d0bc198a1c5c2b1ab36", size = 48619, upload-time = "2026-07-25T21:44:41.216Z" },
+]
+
+[[package]]
+name = "six"
+version = "1.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
 name = "sniffio"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -774,4 +881,13 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f2/0f/3f86e61397dd33bf2ccf28188c40db6a740658aeebbbf6e7dbc101a1f487/uvicorn-0.52.4.tar.gz", hash = "sha256:73acfee47a0b133c5de13d219492d62d8a31e935f4fe6e41a232451a15379f86", size = 100627, upload-time = "2026-08-19T06:27:41.821Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/79/4a20b54ab0491485ccd8c077db2d39187c7f12b3e15485d38a7be37c81b4/uvicorn-0.52.4-py3-none-any.whl", hash = "sha256:f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1", size = 79871, upload-time = "2026-08-19T06:27:40.36Z" },
+]
+
+[[package]]
+name = "ws4py"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/55/dd8a5e1f975d1549494fe8692fc272602f17e475fe70de910cdd53aec902/ws4py-0.6.0.tar.gz", hash = "sha256:9f87b19b773f0a0744a38f3afa36a803286dd3197f0bb35d9b75293ec7002d19", size = 53288, upload-time = "2024-12-19T10:43:23.641Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/89/62/dad08725f855f9695d1c2b34466cf0d1482d1168bb54d73d22b6b0124ba3/ws4py-0.6.0-py3-none-any.whl", hash = "sha256:1499c3fc103a65eb12d7b1ead7566f88487f6f678ab10ee4e53cf2411c068752", size = 45806, upload-time = "2024-12-19T10:43:22.146Z" },
 ]

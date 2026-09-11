@@ -28,6 +28,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "dai>=0.3.75",
+    "depthai_camera_stream@git+https://github.com/qinhy/depthai-camera-stream",
     "npb@git+https://github.com/qinhy/npb",
     "numpy>=2.0",
     "pydantic>=2.7",
