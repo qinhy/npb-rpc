@@ -12,19 +12,33 @@ except ImportError:  # Only needed for ZeroMQ IPC capability detection.
 from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
 
 try:
-    from .msg import CameraFrameRequest, CameraFrameSetRequest
+    from .msg import (
+        CameraCloseRequest,
+        CameraFrameRequest,
+        CameraFrameSetRequest,
+        CameraOpenRequest,
+    )
     from .rpcapi import (
+        client_camera_close,
         client_camera_frame,
         client_camera_frame_set,
+        client_camera_open,
         client_camera_status,
         resolve_service_instance,
     )
     from .server import run_server
 except ImportError:  # Support `python cli.py ...` from this directory.
-    from msg import CameraFrameRequest, CameraFrameSetRequest
+    from msg import (
+        CameraCloseRequest,
+        CameraFrameRequest,
+        CameraFrameSetRequest,
+        CameraOpenRequest,
+    )
     from rpcapi import (
+        client_camera_close,
         client_camera_frame,
         client_camera_frame_set,
+        client_camera_open,
         client_camera_status,
         resolve_service_instance,
     )
@@ -99,10 +113,45 @@ def run_client(
             f"registry: {discovery.root}"
         )
 
+    if args.open_camera:
+        response = client_camera_open(
+            CameraOpenRequest(
+                device=args.device or "",
+                timeout_s=args.control_timeout,
+            ),
+            **target,
+        )
+        print(
+            "open:",
+            f"ok={response.ok}",
+            f"online={response.online}",
+            f"device={response.device!r}",
+            f"generation={response.generation}",
+            f"error={response.error!r}",
+        )
+        return
+
+    if args.close_camera:
+        response = client_camera_close(
+            CameraCloseRequest(timeout_s=args.control_timeout),
+            **target,
+        )
+        print(
+            "close:",
+            f"ok={response.ok}",
+            f"online={response.online}",
+            f"device={response.device!r}",
+            f"generation={response.generation}",
+            f"error={response.error!r}",
+        )
+        return
+
     status = client_camera_status(**target)
     print(
         "status:",
+        f"requested_open={status.requested_open}",
         f"online={status.online}",
+        f"device={status.device!r}",
         f"generation={status.generation}",
         f"restarts={status.restart_count}",
         f"published={status.frames_published}",
@@ -240,6 +289,36 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="camera retry delay in seconds (default: 1.0)",
     )
+    parser.add_argument(
+        "--device",
+        default="",
+        help=(
+            "DepthAI DeviceID, PoE IP address, or USB path. On the server this "
+            "is the initial device; with --open-camera it is the device to open."
+        ),
+    )
+    parser.add_argument(
+        "--no-auto-open",
+        action="store_true",
+        help="start the RPC server with the camera closed; use camera.open later",
+    )
+    control = parser.add_mutually_exclusive_group()
+    control.add_argument(
+        "--open-camera",
+        action="store_true",
+        help="client action: call camera.open and exit",
+    )
+    control.add_argument(
+        "--close-camera",
+        action="store_true",
+        help="client action: call camera.close and exit",
+    )
+    parser.add_argument(
+        "--control-timeout",
+        type=float,
+        default=10.0,
+        help="seconds to wait for camera.open/camera.close (default: 10)",
+    )
     parser.add_argument("--stream", choices=VALID_STREAMS, default="rgb")
     parser.add_argument("--thumbnail", action="store_true")
     parser.add_argument(
@@ -282,6 +361,8 @@ def main() -> None:
             service=args.service,
             instance_id=server_name,
             advertise_endpoint=args.advertise_endpoint,
+            device=args.device,
+            auto_open=not args.no_auto_open,
         )
     elif args.role == "client":
         run_client(args, discovery)

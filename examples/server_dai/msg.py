@@ -10,9 +10,36 @@ class EmptyRequest(BinaryModel):
     pass
 
 
-@binary_schema("npb-rpc.dai.camera.status.response", version=1)
-class CameraStatusResponse(BinaryModel):
+@binary_schema("npb-rpc.dai.camera.open.request", version=1)
+class CameraOpenRequest(BinaryModel):
+    """Open a DepthAI device. Empty device means automatic device selection."""
+
+    device: str = ""
+    timeout_s: float = 10.0
+
+
+@binary_schema("npb-rpc.dai.camera.close.request", version=1)
+class CameraCloseRequest(BinaryModel):
+    """Close the active DepthAI device while keeping the RPC service alive."""
+
+    timeout_s: float = 5.0
+
+
+@binary_schema("npb-rpc.dai.camera.control.response", version=1)
+class CameraControlResponse(BinaryModel):
+    ok: bool
+    requested_open: bool
     online: bool
+    device: str
+    generation: int
+    error: str
+
+
+@binary_schema("npb-rpc.dai.camera.status.response", version=2)
+class CameraStatusResponse(BinaryModel):
+    requested_open: bool
+    online: bool
+    device: str
     generation: int
     restart_count: int
     frames_published: int

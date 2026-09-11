@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 import numpy as np
+from pydantic import field_serializer, field_validator
 import zmq
 from npb import BinaryModel, binary_schema
 
@@ -24,6 +25,18 @@ from npb_rpc import (
 @binary_schema("npb-rpc.example.discovery.sum.request", version=1)
 class SumRequest(BinaryModel):
     values: np.ndarray
+    
+    @field_validator("values", mode="before",
+            json_schema_input_type=list[float])
+    @classmethod
+    def parse_values(cls, value):
+        if isinstance(value, np.ndarray): return value
+        return np.asarray(value, dtype=np.float32)
+
+    @field_serializer("values", when_used="json")
+    def serialize_values(self, value: np.ndarray) -> list[float]:
+        return value.tolist()
+
 
 
 @binary_schema("npb-rpc.example.discovery.sum.response", version=1)
