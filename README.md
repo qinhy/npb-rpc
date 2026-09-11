@@ -1,8 +1,9 @@
 # npb-rpc
 
-`npb-rpc` adds typed unary RPC to [NPB](https://github.com/qinhy/npb), preserving NPB's Pydantic
-schema validation, zero-copy NumPy decode, preallocated-buffer support, and
-optional external blob stores.
+`npb-rpc` adds typed unary RPC and pluggable service discovery to
+[NPB](https://github.com/qinhy/npb), preserving NPB's Pydantic schema
+validation, zero-copy NumPy decode, preallocated-buffer support, and optional
+external blob stores.
 
 ZeroMQ and NNG transports are optional:
 
@@ -138,6 +139,90 @@ To measure raw NNG IPC request/reply latency on the current platform:
 
 ```bash
 uv run python examples/benchmark_nng_ipc.py --count 10000 --size 64
+```
+
+## Service discovery
+
+Discovery is a control plane only. A server publishes its endpoint and refreshes
+a heartbeat; a client resolves a logical service name and then calls the chosen
+instance directly:
+
+```text
+server instance ---> FilesystemDiscovery <--- client
+       ^                                      |
+       +------------ direct RPC --------------+
+```
+
+Wrap either concrete server with `DiscoveredRpcServer`:
+
+```python
+from npb_rpc import (
+    DiscoveredRpcServer,
+    FilesystemDiscovery,
+    RpcContext,
+    ZmqRpcServer,
+)
+
+discovery = FilesystemDiscovery()
+server = DiscoveredRpcServer(
+    "array-service",
+    ZmqRpcServer.bind("tcp://0.0.0.0:7001"),
+    discovery,
+    advertise_endpoint="tcp://192.168.1.10:7001",
+)
+
+
+@server.method("array.sum", request=SumRequest, response=SumResponse)
+def array_sum(request: SumRequest, context: RpcContext) -> SumResponse:
+    return SumResponse(total=float(request.values.sum()))
+
+
+server.serve_forever()
+```
+
+The client only needs the logical service name. Discovery records include the
+endpoint and the `zmq` or `nng` backend, so both backends can share one registry:
+
+```python
+from npb_rpc import DiscoveredRpcClient, FilesystemDiscovery
+
+with DiscoveredRpcClient(FilesystemDiscovery()) as client:
+    result = client.call(
+        "array-service",
+        "array.sum",
+        SumRequest(values=np.arange(10, dtype=np.float32)),
+        SumResponse,
+    )
+```
+
+List every service that currently has at least one healthy instance, then
+inspect its instances:
+
+```python
+for service in discovery.list_services():
+    print(service)
+    for instance in discovery.list_instances(service):
+        print(instance.to_dict())
+```
+
+`FilesystemDiscovery` stores atomic JSON records under the system temporary
+directory at `npb-rpc/registry` by default. Records older than the heartbeat
+timeout are ignored and pruned. When multiple healthy instances use the same
+service name, `resolve()` selects them round-robin. Supply the same custom
+registry path to clients and servers when overriding the default. The default
+registry is intended for processes on one machine; use a shared registry path
+or implement `DiscoveryBackend` for discovery across hosts. Keep a server's
+`heartbeat_interval` shorter than the registry's `heartbeat_timeout`.
+
+The combined example can advertise either backend over TCP or IPC:
+
+```bash
+uv run python examples/discovery_sum.py server --backend zmq --transport tcp
+uv run python examples/discovery_sum.py client
+uv run python examples/discovery_sum.py list
+
+uv run python examples/discovery_sum.py server --backend nng --transport ipc
+uv run python examples/discovery_sum.py client
 ```
 
 Handlers may return structured failures:
