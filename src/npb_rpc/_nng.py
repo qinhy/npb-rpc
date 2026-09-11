@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import struct
@@ -77,6 +78,49 @@ def portable_ipc(name: str, directory: str | os.PathLike[str] | None = None) -> 
     base = directory or os.environ.get("NNG_IPC_DIR") or tempfile.gettempdir()
     path = Path(base).expanduser().resolve() / name
     return f"ipc://{path}"
+
+
+def portable_tcp(
+    name: str,
+    host: str = "127.0.0.1",
+) -> str:
+    """Return a deterministic NNG TCP endpoint derived from a server name.
+
+    The same server name always maps to the same TCP port. This allows
+    clients and servers to independently derive the endpoint without a
+    registry or hard-coded port table.
+
+    Note:
+        Different names can theoretically map to the same port because
+        the available TCP port space is finite.
+    """
+    TCP_PORT_MIN = 15000
+    TCP_PORT_MAX = 29999
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("TCP name must be a non-empty string")
+
+    if name.startswith("tcp://"):
+        return name
+
+    if "://" in name:
+        raise ValueError(
+            f"expected a TCP name, got transport URL: {name!r}"
+        )
+
+    if not isinstance(host, str) or not host.strip():
+        raise ValueError("TCP host must be a non-empty string")
+
+    digest = hashlib.blake2s(
+        f"npb-rpc:{name}".encode("utf-8"),
+        digest_size=4,
+    ).digest()
+
+    value = int.from_bytes(digest, byteorder="big")
+
+    port_count = TCP_PORT_MAX - TCP_PORT_MIN + 1
+    port = TCP_PORT_MIN + (value % port_count)
+
+    return f"tcp://{host}:{port}"
 
 
 def _normalize_endpoint(endpoint: str) -> str:

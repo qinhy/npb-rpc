@@ -8,17 +8,14 @@ import numpy as np
 from npb import BinaryModel, binary_schema
 from pydantic import field_serializer, field_validator
 
-from npb_rpc import NngRpcClient, NngRpcServer, RpcContext, portable_ipc
-
-TCP_ENDPOINT = "tcp://127.0.0.1:5556"
-IPC_ENDPOINT = portable_ipc("npb-rpc-sum")
+from npb_rpc import NngRpcClient, NngRpcServer, RpcContext, portable_ipc, portable_tcp
 
 
 @binary_schema("npb-rpc.example.sum.request", version=1)
 class SumRequest(BinaryModel):
     values: np.ndarray
     
-    @field_validator("values",mode="before",
+    @field_validator("values", mode="before",
             json_schema_input_type=list[float])
     @classmethod
     def parse_values(cls, value):
@@ -35,8 +32,12 @@ class SumResponse(BinaryModel):
     total: float
 
 
-def endpoint_for(transport: str) -> str:
-    return {"tcp":TCP_ENDPOINT,"ipc":IPC_ENDPOINT}.get(transport)
+def endpoint_for(transport: str, server_name: str, host="127.0.0.1") -> str:
+    if transport == "ipc":
+        return portable_ipc(f"npb-rpc-{server_name}")
+    if transport == "tcp":
+        return portable_tcp(server_name, host=host)
+    raise ValueError(f"unsupported transport: {transport}")
 
 
 def run_server(endpoint: str) -> None:
@@ -53,7 +54,7 @@ def run_server(endpoint: str) -> None:
 
 def client_array_sum(request: SumRequest, endpoint) -> SumResponse:
     with NngRpcClient.connect(endpoint) as client:
-        return client.call("array.sum",request,SumResponse)
+        return client.call("array.sum", request, SumResponse)
 
 
 def run_client(endpoint: str) -> None:
@@ -64,7 +65,7 @@ def run_client(endpoint: str) -> None:
 
 
 def run_api(endpoint: str) -> None:
-    process = mp.Process(target=run_server,args=(endpoint,),)
+    process = mp.Process(target=run_server, args=(endpoint,))
     process.start()
 
     import uvicorn
@@ -73,7 +74,7 @@ def run_api(endpoint: str) -> None:
 
     @app.post("/sum")
     def sum_values(request: SumRequest) -> SumResponse:
-        return client_array_sum(request,endpoint=endpoint)
+        return client_array_sum(request, endpoint=endpoint)
 
     try:
         uvicorn.run(app)
@@ -85,12 +86,12 @@ def run_api(endpoint: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the NNG sum example")
     parser.add_argument("role", choices=("server", "client", "api"))
-    parser.add_argument("--transport", choices=("tcp", "ipc"),
-        default="ipc",
-        help="NNG transport to use (default: ipc)",
-    )
+    parser.add_argument("transport", choices=("tcp", "ipc"))
+    parser.add_argument("server_name")
+    parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
-    endpoint = endpoint_for(args.transport)
+
+    endpoint = endpoint_for(args.transport, args.server_name, args.host)
 
     if args.role == "server":
         run_server(endpoint)
