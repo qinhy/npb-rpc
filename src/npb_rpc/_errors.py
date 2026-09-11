@@ -21,6 +21,14 @@ class RpcTimeoutError(RpcTransportError, TimeoutError):
     """A call could not complete before its local deadline."""
 
 
+class DiscoveryError(RpcError):
+    """A service discovery operation failed."""
+
+
+class ServiceNotFoundError(DiscoveryError, LookupError):
+    """No healthy instance is registered for a logical service name."""
+
+
 class RemoteRpcError(RpcError):
     """The remote server returned a non-OK status."""
 
