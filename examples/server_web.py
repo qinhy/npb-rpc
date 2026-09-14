@@ -1,27 +1,16 @@
 from __future__ import annotations
 
-import io
 import os
-import zipfile
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException
 
 from discovery_sum import SumRequest, SumResponse
 from npb_rpc import FilesystemDiscovery
 
-from server_dai.interface import ApiMethod, CAMERA_API
-from server_dai.msg import (
-    CameraCloseRequest,
-    CameraFrameRequest,
-    CameraFrameSetRequest,
-    CameraOpenRequest,
-    EmptyRequest,
-)
-from server_dai.rpcapi import RpcTarget
+from server_dai.interface import CAMERA_API, RpcTarget, add_camera_routes
 
 
 app = FastAPI(title="Discovered RPC Web API")
@@ -32,136 +21,24 @@ DISCOVERY = FilesystemDiscovery(Path(_registry) if _registry else None)
 DYNAMIC_PREFIX = "dynamic:"
 
 
-def rpc_target(service: str, name: str) -> RpcTarget:
-    """Create one reusable discovered RPC destination."""
-    return RpcTarget(
+def add_camera_service_routes(service: str, name: str) -> None:
+    """Camera HTTP integration is fully provided by interface.py."""
+    add_camera_routes(
+        app,
+        discovery=DISCOVERY,
+        service=service,
+        server_name=name,
+        route_name_prefix=DYNAMIC_PREFIX,
+    )
+
+
+def add_sum_routes(service: str, name: str) -> None:
+    """Existing sum demo; it can reuse the generic RpcTarget from interface.py."""
+    target = RpcTarget(
         discovery=DISCOVERY,
         service=service,
         server_name=name,
     )
-
-
-def add_camera_routes(service: str, name: str) -> None:
-    """Expose the central camera API contract through FastAPI."""
-    target = rpc_target(service, name)
-    base = f"/{service}/{name}"
-    tag = f"{service}:{name}"
-
-    def expose(api_method: ApiMethod):
-        """Bind a Python HTTP adapter to the HTTP metadata in interface.py."""
-        web = api_method.web
-        if web is None:
-            raise ValueError(f"{api_method.rpc!r} has no HTTP exposure")
-
-        responses = None
-        if web.response == "jpeg":
-            responses = {200: {"content": {"image/jpeg": {}}}}
-        elif web.response == "zip":
-            responses = {200: {"content": {"application/zip": {}}}}
-
-        def decorator(func: Callable):
-            app.add_api_route(
-                f"{base}/{web.path}",
-                func,
-                methods=[web.method],
-                tags=[tag],
-                name=f"{DYNAMIC_PREFIX}{service}:{name}:{web.path}",
-                responses=responses,
-            )
-            return func
-
-        return decorator
-
-    def call(api_method: ApiMethod, request):
-        """Translate RPC/discovery failures into HTTP gateway errors."""
-        try:
-            return target.call(api_method, request)
-        except RuntimeError as exc:
-            message = str(exc)
-            if "was not found" in message:
-                raise HTTPException(404, message) from exc
-            if "ambiguous" in message:
-                raise HTTPException(409, message) from exc
-            raise HTTPException(502, f"RPC failed: {exc}") from exc
-        except Exception as exc:
-            raise HTTPException(502, f"RPC failed: {exc}") from exc
-
-    @expose(CAMERA_API.open)
-    def open_camera(device: str = "169.254.1.222"):
-        return call(
-            CAMERA_API.open,
-            CameraOpenRequest(device=device),
-        )
-
-    @expose(CAMERA_API.close)
-    def close_camera():
-        return call(
-            CAMERA_API.close,
-            CameraCloseRequest(),
-        )
-
-    @expose(CAMERA_API.status)
-    def status():
-        return call(
-            CAMERA_API.status,
-            EmptyRequest(),
-        )
-
-    @expose(CAMERA_API.get_frame)
-    def frame(stream: str = "rgb", thumbnail: bool = False):
-        result = call(
-            CAMERA_API.get_frame,
-            CameraFrameRequest(
-                stream=stream,
-                thumbnail=thumbnail,
-            ),
-        )
-        if not result.ok:
-            raise HTTPException(503, result.error)
-
-        return Response(
-            result.jpeg.tobytes(),
-            media_type="image/jpeg",
-        )
-
-    @expose(CAMERA_API.frame)
-    def frames():
-        result = call(
-            CAMERA_API.frame,
-            CameraFrameSetRequest(),
-        )
-
-        images = {
-            "rgb.jpg": result.rgb,
-            "left.jpg": result.left,
-            "right.jpg": result.right,
-            "rgb_thumbnail.jpg": result.rgb_thumbnail,
-            "left_thumbnail.jpg": result.left_thumbnail,
-            "right_thumbnail.jpg": result.right_thumbnail,
-        }
-
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as archive:
-            for filename, image in images.items():
-                if image.size:
-                    archive.writestr(filename, image.tobytes())
-
-        return Response(
-            buf.getvalue(),
-            media_type="application/zip",
-        )
-
-    @expose(CAMERA_API.get_calib)
-    def get_calib():
-        return call(
-            CAMERA_API.get_calib,
-            EmptyRequest(),
-        )
-
-
-def add_sum_routes(service: str, name: str) -> None:
-    """Existing sum demo, now reusing the common RpcTarget transport logic."""
-    target = rpc_target(service, name)
     base = f"/{service}/{name}"
 
     def array_sum(body: SumRequest):
@@ -192,15 +69,14 @@ def add_sum_routes(service: str, name: str) -> None:
     )
 
 
-# Discovery service name -> HTTP route builder.
 SERVICE_BUILDERS = {
-    CAMERA_API.service: add_camera_routes,
+    CAMERA_API.service: add_camera_service_routes,
     "sum": add_sum_routes,
 }
 
 
 def refresh_routes():
-    # Remove only dynamically generated service-instance routes.
+    # Remove only service-instance routes generated by the previous refresh.
     app.router.routes[:] = [
         route
         for route in app.router.routes

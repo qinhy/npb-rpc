@@ -12,40 +12,10 @@ except ImportError:  # Only needed for ZeroMQ IPC capability detection.
 from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
 
 try:
-    from .msg import (
-        CameraCloseRequest,
-        CameraFrameRequest,
-        CameraFrameSetRequest,
-        CameraOpenRequest,
-    )
-    from .rpcapi import (
-        client_camera_close,
-        client_camera_frame,
-        client_camera_frame_set,
-        client_camera_open,
-        client_camera_status,
-        client_camera_get_calib,
-        resolve_service_instance,
-    )
-    from .interface import CAMERA_API
+    from .interface import CAMERA_API, CameraClient, resolve_service_instance
     from .server import run_server
-except ImportError:  # Support `python cli.py ...` from this directory.
-    from msg import (
-        CameraCloseRequest,
-        CameraFrameRequest,
-        CameraFrameSetRequest,
-        CameraOpenRequest,
-    )
-    from rpcapi import (
-        client_camera_close,
-        client_camera_frame,
-        client_camera_frame_set,
-        client_camera_open,
-        client_camera_status,
-        client_camera_get_calib,
-        resolve_service_instance,
-    )
-    from interface import CAMERA_API
+except ImportError:  # Support running files directly from this directory.
+    from interface import CAMERA_API, CameraClient, resolve_service_instance
     from server import run_server
 
 
@@ -60,9 +30,10 @@ def endpoint_for(
     name: str,
     host: str = "127.0.0.1",
 ) -> str:
-    """Build a portable per-instance endpoint, matching the discovery example."""
+    """Build a portable per-instance endpoint."""
     if transport == "tcp":
         return portable_tcp(name, host=host)
+
     if backend == "zmq":
         if zmq is None:
             raise SystemExit(
@@ -74,30 +45,33 @@ def endpoint_for(
                 "This libzmq build does not support ipc://. "
                 "Use --transport tcp or --backend nng."
             )
+
     return portable_ipc(name)
 
 
-def _client_target_kwargs(
+def make_client(
     args: argparse.Namespace,
     discovery: FilesystemDiscovery,
-) -> dict[str, object]:
+) -> CameraClient:
     if args.endpoint:
-        return {
-            "endpoint": args.endpoint,
-            "backend": args.backend,
-        }
-    return {
-        "discovery": discovery,
-        "service": args.service,
-        "server_name": args.server_name,
-    }
+        return CameraClient(
+            endpoint=args.endpoint,
+            backend=args.backend,
+            service=args.service,
+        )
+
+    return CameraClient(
+        discovery=discovery,
+        service=args.service,
+        server_name=args.server_name,
+    )
 
 
 def run_client(
     args: argparse.Namespace,
     discovery: FilesystemDiscovery,
 ) -> None:
-    target = _client_target_kwargs(args, discovery)
+    client = make_client(args, discovery)
 
     if args.endpoint:
         print(f"connecting directly via {args.backend} at {args.endpoint}")
@@ -118,12 +92,9 @@ def run_client(
         )
 
     if args.open_camera:
-        response = client_camera_open(
-            CameraOpenRequest(
-                device=args.device or "",
-                timeout_s=args.control_timeout,
-            ),
-            **target,
+        response = client.open(
+            args.device or "",
+            timeout_s=args.control_timeout,
         )
         print(
             "open:",
@@ -136,10 +107,7 @@ def run_client(
         return
 
     if args.close_camera:
-        response = client_camera_close(
-            CameraCloseRequest(timeout_s=args.control_timeout),
-            **target,
-        )
+        response = client.close(timeout_s=args.control_timeout)
         print(
             "close:",
             f"ok={response.ok}",
@@ -150,7 +118,7 @@ def run_client(
         )
         return
 
-    status = client_camera_status(**target)
+    status = client.status()
     print(
         "status:",
         f"requested_open={status.requested_open}",
@@ -164,18 +132,19 @@ def run_client(
     )
 
     if args.single:
-        # Backward-compatible diagnostic path for one stream.
-        frame = client_camera_frame(
-            CameraFrameRequest(stream=args.stream, thumbnail=args.thumbnail),
-            **target,
+        frame = client.get_frame(
+            args.stream,
+            thumbnail=args.thumbnail,
         )
         if not frame.ok:
             print(f"frame unavailable: {frame.error}")
             return
+
         suffix = "_thumbnail" if args.thumbnail else ""
         path = f"{args.stream}{suffix}.jpg"
         with open(path, "wb") as f:
             f.write(frame.jpeg.tobytes())
+
         print(
             f"wrote {path}: {frame.jpeg.nbytes} bytes, "
             f"seq={frame.sequence}, online={frame.camera_online}, "
@@ -183,7 +152,7 @@ def run_client(
         )
         return
 
-    frames = client_camera_frame_set(CameraFrameSetRequest(), **target)
+    frames = client.frames()
     print(
         "frame-set:",
         f"ok={frames.ok}",
@@ -216,6 +185,7 @@ def run_client(
             frames.right_thumbnail_captured_ns,
         ),
     )
+
     for path, jpeg, sequence, captured_ns in outputs:
         if jpeg.size == 0:
             print(f"missing {path}")
@@ -233,6 +203,7 @@ def show_services(discovery: FilesystemDiscovery) -> None:
     if not services:
         print("no healthy services")
         return
+
     for service in services:
         print(f"{service}:")
         for instance in discovery.list_instances(service):
@@ -306,6 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="start the RPC server with the camera closed; use camera.open later",
     )
+
     control = parser.add_mutually_exclusive_group()
     control.add_argument(
         "--open-camera",
@@ -317,6 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="client action: call camera.close and exit",
     )
+
     parser.add_argument(
         "--control-timeout",
         type=float,
@@ -328,7 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--single",
         action="store_true",
-        help="use legacy camera.get_frame instead of fetching all six images",
+        help="use camera.get_frame instead of fetching all six images",
     )
     parser.add_argument("--log-level", default="INFO")
     return parser
