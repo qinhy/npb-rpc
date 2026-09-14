@@ -15,6 +15,7 @@ from .rpcapi import (
     client_camera_frame_set,
     client_camera_open,
     client_camera_status,
+    client_camera_get_calib,
     resolve_service_instance,
 )
 

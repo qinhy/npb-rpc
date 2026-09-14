@@ -24,8 +24,10 @@ try:
         client_camera_frame_set,
         client_camera_open,
         client_camera_status,
+        client_camera_get_calib,
         resolve_service_instance,
     )
+    from .interface import CAMERA_API
     from .server import run_server
 except ImportError:  # Support `python cli.py ...` from this directory.
     from msg import (
@@ -40,14 +42,16 @@ except ImportError:  # Support `python cli.py ...` from this directory.
         client_camera_frame_set,
         client_camera_open,
         client_camera_status,
+        client_camera_get_calib,
         resolve_service_instance,
     )
+    from interface import CAMERA_API
     from server import run_server
 
 
 LOG = logging.getLogger("dai_camera")
 VALID_STREAMS = ("rgb", "left", "right")
-DEFAULT_SERVICE = "camera"
+DEFAULT_SERVICE = CAMERA_API.service
 
 
 def endpoint_for(

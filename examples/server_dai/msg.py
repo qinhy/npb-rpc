@@ -154,3 +154,117 @@ class CameraFrameSetResponse(BinaryModel):
     )
     def serialize_jpeg(self, value: np.ndarray) -> list[int]:
         return value.tolist()
+
+
+@binary_schema("npb-rpc.dai.camera.calibration.response", version=1)
+class CameraCalibrationResponse(BinaryModel):
+    """Normalized calibration information for the active DepthAI device."""
+
+    ok: bool
+    camera_online: bool
+
+    rgb_resolution: tuple[int, int]
+    left_resolution: tuple[int, int]
+    right_resolution: tuple[int, int]
+
+    # Shape: (3, 3)
+    rgb_intrinsics: np.ndarray
+    left_intrinsics: np.ndarray
+    right_intrinsics: np.ndarray
+
+    # Typically shape: (4, 4)
+    left_to_right_extrinsics: np.ndarray
+    left_to_rgb_extrinsics: np.ndarray
+
+    # Shape: (N,)
+    rgb_distortion: np.ndarray
+    left_distortion: np.ndarray
+    right_distortion: np.ndarray
+
+    distortion_coeff_order: tuple[str, ...]
+    stereo_translation_units: str
+
+    board_name: str | None = None
+    product_name: str | None = None
+    device_id: str | None = None
+
+    stereo_baseline_cm: float | None = None
+
+    rgb_fov_deg: float | None = None
+    left_fov_deg: float | None = None
+    right_fov_deg: float | None = None
+
+    error: str = ""
+
+    @field_validator(
+        "rgb_intrinsics",
+        "left_intrinsics",
+        "right_intrinsics",
+        "left_to_right_extrinsics",
+        "left_to_rgb_extrinsics",
+        "rgb_distortion",
+        "left_distortion",
+        "right_distortion",
+        mode="before",
+    )
+    @classmethod
+    def parse_float_array(cls, value):
+        if isinstance(value, np.ndarray):
+            return value.astype(np.float64, copy=False)
+        return np.asarray(value, dtype=np.float64)
+
+    @field_serializer(
+        "rgb_intrinsics",
+        "left_intrinsics",
+        "right_intrinsics",
+        "left_to_right_extrinsics",
+        "left_to_rgb_extrinsics",
+        "rgb_distortion",
+        "left_distortion",
+        "right_distortion",
+        when_used="json",
+    )
+    def serialize_float_array(self, value: np.ndarray):
+        return value.tolist()
+    
+    @classmethod
+    def empty(
+        cls,
+        *,
+        camera_online: bool = False,
+        error: str = "",
+    ) -> "CameraCalibrationResponse":
+        return cls(
+            ok=False,
+            camera_online=camera_online,
+
+            rgb_resolution=(0, 0),
+            left_resolution=(0, 0),
+            right_resolution=(0, 0),
+
+            rgb_intrinsics=np.empty((0, 0), dtype=np.float64),
+            left_intrinsics=np.empty((0, 0), dtype=np.float64),
+            right_intrinsics=np.empty((0, 0), dtype=np.float64),
+
+            left_to_right_extrinsics=np.empty((0, 0), dtype=np.float64),
+            left_to_rgb_extrinsics=np.empty((0, 0), dtype=np.float64),
+
+            rgb_distortion=np.empty((0,), dtype=np.float64),
+            left_distortion=np.empty((0,), dtype=np.float64),
+            right_distortion=np.empty((0,), dtype=np.float64),
+
+            distortion_coeff_order=(),
+            stereo_translation_units="cm",
+
+            board_name=None,
+            product_name=None,
+            device_id=None,
+            stereo_baseline_cm=None,
+            rgb_fov_deg=None,
+            left_fov_deg=None,
+            right_fov_deg=None,
+
+            error=error,
+        )
+
+    
