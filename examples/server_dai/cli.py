@@ -36,7 +36,7 @@ def endpoint_for(backend: str, transport: str, name: str, host: str = "127.0.0.1
     return portable_ipc(name)
 
 
-def make_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> CameraClient:
+def make_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> CameraInterface:
     if args.endpoint:
         return CameraClient(endpoint=args.endpoint, backend=args.backend, service=args.service)
     return CameraClient(discovery=discovery, service=args.service, server_name=args.server_name)

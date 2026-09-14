@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 
 from discovery_sum import SumRequest, SumResponse
 from npb_rpc import FilesystemDiscovery
-from server_dai.interface import CameraInterface, RpcTarget, add_routes
+from server_dai.interface import CameraInterface, RpcTarget, add_routes as add_dai_routes
 
 app = FastAPI(title="Discovered RPC Web API")
 _registry = os.getenv("RPC_REGISTRY") or os.getenv("CAMERA_REGISTRY")
@@ -18,7 +18,7 @@ DYNAMIC_PREFIX = "dynamic:"
 
 
 def add_camera_service_routes(service: str, name: str) -> None:
-    add_routes(
+    add_dai_routes(
         app,
         CameraInterface,
         discovery=DISCOVERY,
