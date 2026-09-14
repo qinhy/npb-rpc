@@ -59,8 +59,9 @@ class SumInterface:
 
 def methods(interface: type):
     for name, fn in interface.__dict__.items():
-        if spec := getattr(fn, "__rpc_spec__", None):
+        if getattr(fn, "__rpc_spec__", None) is not None:
             types = get_type_hints(fn)
+            spec:RpcSpec= fn.__rpc_spec__
             yield name, spec, types["request"], types["return"]
 
 
@@ -107,7 +108,7 @@ def build_client(interface: type):
 
     for name, spec, req_t, res_t in methods(interface):
 
-        def make_method(spec, res_t):
+        def make_method(spec:RpcSpec, res_t):
             def method(self, request):
                 with NngRpcClient.connect(self.endpoint) as client:
                     return client.call(spec.rpc, request, res_t)
@@ -179,7 +180,7 @@ def run_server(endpoint: str):
 
 
 def run_client(endpoint: str):
-    client = SumClient(endpoint)
+    client:SumInterface = SumClient(endpoint)
     response = client.sum(
         SumRequest(values=np.arange(1_000_000, dtype=np.float32))
     )
