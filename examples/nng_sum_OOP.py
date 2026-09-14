@@ -7,7 +7,7 @@ from typing import Any, get_type_hints
 
 import numpy as np
 from npb import BinaryModel, binary_schema
-from npb_rpc import NngRpcClient, NngRpcServer, RpcContext, portable_ipc, portable_tcp
+from npb_rpc import NngRpcClient, NngRpcServer, RpcContext, portable_ipc, portable_tcp, RpcSpec, api, methods
 from pydantic import field_serializer, field_validator
 
 
@@ -38,31 +38,10 @@ class SumResponse(BinaryModel):
 # Unified API definition
 # ----------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class RpcSpec:
-    rpc: str
-    http: str | None = None
-    path: str | None = None
-
-
-def api(rpc: str, http: str | None = None, path: str | None = None):
-    def wrap(fn):
-        fn.__rpc_spec__ = RpcSpec(rpc, http, path)
-        return fn
-    return wrap
-
 
 class SumInterface:
     @api("array.sum", "POST", "/sum")
     def sum(self, request: SumRequest) -> SumResponse: ...
-
-
-def methods(interface: type):
-    for name, fn in interface.__dict__.items():
-        if getattr(fn, "__rpc_spec__", None) is not None:
-            types = get_type_hints(fn)
-            spec:RpcSpec= fn.__rpc_spec__
-            yield name, spec, types["request"], types["return"]
 
 
 # ----------------------------------------------------------------------
