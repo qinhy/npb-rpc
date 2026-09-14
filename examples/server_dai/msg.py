@@ -14,7 +14,7 @@ class EmptyRequest(BinaryModel):
 class CameraOpenRequest(BinaryModel):
     """Open a DepthAI device. Empty device means automatic device selection."""
 
-    device: str = ""
+    device: str = "169.254.1.222"
     timeout_s: float = 10.0
 
 
@@ -206,6 +206,7 @@ class CameraCalibrationResponse(BinaryModel):
         "left_distortion",
         "right_distortion",
         mode="before",
+        json_schema_input_type=list[float] | list[list[float]],
     )
     @classmethod
     def parse_float_array(cls, value):
@@ -224,7 +225,10 @@ class CameraCalibrationResponse(BinaryModel):
         "right_distortion",
         when_used="json",
     )
-    def serialize_float_array(self, value: np.ndarray):
+    def serialize_float_array(
+        self,
+        value: np.ndarray,
+    ) -> list[float] | list[list[float]]:
         return value.tolist()
     
     @classmethod

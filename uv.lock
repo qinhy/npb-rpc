@@ -182,7 +182,7 @@ wheels = [
 [[package]]
 name = "depthai-camera-stream"
 version = "0.2.0"
-source = { git = "https://github.com/qinhy/depthai-camera-stream#48347d24c6307cc344467b36d454530c46847ae4" }
+source = { git = "https://github.com/qinhy/depthai-camera-stream#4911e02561147661a9a2ae7c13c1523be834a70d" }
 dependencies = [
     { name = "depthai" },
 ]

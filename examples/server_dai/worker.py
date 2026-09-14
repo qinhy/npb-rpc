@@ -8,7 +8,8 @@ import time
 from typing import Any, Literal
 
 import depthai as dai
-from depthai_camera_stream import CameraStream
+from depthai_camera_stream import CameraCalibrationResult, CameraStream
+import numpy as np
 
 try:
     from .msg import (
@@ -18,6 +19,7 @@ try:
 except ImportError:  # Support running the files directly from one directory.
     from msg import (
         CameraStatusResponse,
+        CameraCalibrationResponse,
     )
 
 
@@ -120,15 +122,49 @@ class CameraSupervisor:
         self._session_device = ""
         self.error = "camera is opening" if auto_open else "camera closed"
 
-        self.thread = threading.Thread(
-            target=self._run,
+        self._thread_lock = threading.Lock()
+        self.thread = self._make_thread()
+
+    def _make_thread(self) -> threading.Thread:
+        return threading.Thread(
+            target=self._thread_main,
             name="depthai-camera-supervisor",
             daemon=True,
         )
 
     def start(self) -> None:
-        if not self.thread.is_alive():
+        # A Python Thread object cannot be started twice. Recreate it if a previous
+        # worker exited unexpectedly. close() remains a permanent shutdown.
+        with self._thread_lock:
+            if self.stop_event.is_set():
+                raise RuntimeError("camera supervisor has been permanently stopped")
+            if self.thread.is_alive():
+                return
+            if self.thread.ident is not None:
+                self.thread = self._make_thread()
             self.thread.start()
+
+    def _thread_main(self) -> None:
+        # Last-resort guard for unexpected Python-level failures in _run itself.
+        # This cannot catch native SIGSEGV/SIGABRT from depthai; process isolation
+        # is required if the RPC/server process must survive those failures.
+        while not self.stop_event.is_set():
+            try:
+                self._run()
+                return
+            except BaseException as exc:
+                if self.stop_event.is_set():
+                    return
+                LOG.exception("camera supervisor worker crashed; restarting", exc_info=exc)
+                with self.cv:
+                    self.online = False
+                    self._session_active = False
+                    self._session_device = ""
+                    self._session_cancel = None
+                    self.restart_count += 1
+                    self.error = f"supervisor error: {type(exc).__name__}: {exc}"
+                    self.cv.notify_all()
+                self.stop_event.wait(self.reconnect_delay)
 
     def close(self) -> None:
         """Permanently stop the supervisor (process/server shutdown path)."""
@@ -139,10 +175,12 @@ class CameraSupervisor:
             if self._session_cancel is not None:
                 self._session_cancel.set()
             self.cv.notify_all()
-        self.thread.join(timeout=5.0)
-        if self.thread.is_alive():
-            # Do not block RPC/process shutdown forever on a stuck device driver.
-            LOG.warning("camera worker did not exit within 5 seconds")
+        # join() raises if the Thread was never started, so keep close() idempotent.
+        if self.thread.ident is not None:
+            self.thread.join(timeout=5.0)
+            if self.thread.is_alive():
+                # Do not block RPC/process shutdown forever on a stuck device driver.
+                LOG.warning("camera worker did not exit within 5 seconds")
         with self.cv:
             self.online = False
             self._session_device = ""
@@ -159,6 +197,23 @@ class CameraSupervisor:
         target = device.strip()
         timeout_s = max(0.0, float(timeout_s))
         deadline = time.monotonic() + timeout_s
+
+        if self.stop_event.is_set():
+            return (
+                False,
+                False,
+                target,
+                self.generation,
+                "camera supervisor has been permanently stopped",
+            )
+
+        # Be tolerant if the caller forgot to start the supervisor, or if a prior
+        # Python-level worker failure ended the Thread object.
+        if not self.thread.is_alive():
+            try:
+                self.start()
+            except Exception as exc:
+                return False, False, target, self.generation, f"supervisor start failed: {exc}"
 
         with self.cv:
             if (
@@ -413,10 +468,15 @@ class CameraSupervisor:
     ) -> None:
         pipeline: dai.Pipeline | None = None
         device_handle: Any | None = None
+        streams: dict[str, Any] = {}
+        pipeline_started = False
+        session_failed = False
         try:
+            print(f"try open {device}")
             if device:
                 # DepthAI v3: select a specific DeviceID, PoE IP, or USB path.
                 device_handle = dai.Device(dai.DeviceInfo(device))
+                print(f"device_handle {device_handle}")
                 pipeline = dai.Pipeline(device_handle)
             else:
                 pipeline = dai.Pipeline()
@@ -425,12 +485,17 @@ class CameraSupervisor:
                 return
 
             streams = self.config.build(pipeline)
-            stream:CameraStream = list(streams)[0]
-            self.calibration = CameraCalibrationResponse(**stream.read_calibration_dict())
+            print(f"streams {streams}")
+            stream: CameraStream = next(iter(streams.values()))
+            self.calibration = CameraCalibrationResponse(**dict(
+                        ok=True, camera_online=True,**stream.read_calibration_dict()))
+            print(f"calibration {self.calibration}")
+
             if cancel.is_set() or self.stop_event.is_set():
                 return
 
             pipeline.start()
+            pipeline_started = True
             if not self._set_online(device, revision):
                 return
 
@@ -466,9 +531,15 @@ class CameraSupervisor:
 
                 if not got_packet:
                     cancel.wait(0.002)
+        except BaseException:
+            # Once a DepthAI call fails, do not make additional device API calls in
+            # cleanup. Some native failure paths close/disconnect the device first,
+            # and calling stop/wait/close again can enter unsafe native code.
+            session_failed = True
+            raise
         finally:
-            # Mark the current session offline before the potentially slower device
-            # teardown. A close RPC still waits for _session_active to become false.
+            # Mark the current session offline before the potentially slower teardown.
+            # A close RPC still waits for _session_active to become false in _run().
             with self.cv:
                 if revision == self._command_revision:
                     self.online = False
@@ -477,13 +548,23 @@ class CameraSupervisor:
                         self.error = "camera reconnecting"
                     self.cv.notify_all()
 
-            if pipeline is not None:
+            # Drop CameraStream / output-queue wrappers before touching the pipeline or
+            # device they reference. This avoids destructors running after Device.close().
+            streams.clear()
+
+            # Only perform graceful stop/wait for a session that actually started and
+            # is ending normally (camera.close, switch, or server shutdown). If any
+            # DepthAI operation raised, simply release Python references and let the
+            # library's own ownership/destructors handle the already-failed session.
+            if pipeline is not None and pipeline_started and not session_failed:
                 with suppress(Exception):
                     pipeline.stop()
                 with suppress(Exception):
                     pipeline.wait()
-            if device_handle is not None:
-                # Explicitly selected devices are host objects we created ourselves.
-                with suppress(Exception):
-                    device_handle.close()
+
+            # IMPORTANT: do not explicitly call device_handle.close() here. Pipeline
+            # and Device share native state, and startup/disconnect failure paths may
+            # already have closed it. Release in dependency order instead.
+            pipeline = None
+            device_handle = None
 

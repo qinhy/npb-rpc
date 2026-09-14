@@ -1,50 +1,31 @@
 #!/usr/bin/env python3
-"""Fault-tolerant DepthAI camera RPC server bootstrap.
-
-The public RPC interface and all handler registration live in interface.py.
-This module only owns transport/server lifetime and the camera worker lifetime.
-"""
+"""Fault-tolerant DepthAI camera RPC server bootstrap."""
 
 from __future__ import annotations
 
 import logging
 import threading
 
-from npb_rpc import (
-    DiscoveredRpcServer,
-    FilesystemDiscovery,
-    NngRpcServer,
-    ZmqRpcServer,
-)
+from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer
 
 try:
-    from .interface import CAMERA_API, add_camera_rpc
+    from .interface import CameraInterface, CameraService, add_rpc
     from .worker import CameraSupervisor, DaiStereoCameraStream
 except ImportError:  # Support running files directly from this directory.
-    from interface import CAMERA_API, add_camera_rpc
+    from interface import CameraInterface, CameraService, add_rpc
     from worker import CameraSupervisor, DaiStereoCameraStream
-
 
 LOG = logging.getLogger("nng_dai_camera")
 STOP = threading.Event()
 
 
-def make_server(
-    endpoint: str,
-    camera: CameraSupervisor,
-    *,
-    backend: str = "nng",
-):
-    """Bind one transport server and install the complete camera RPC interface."""
-    if backend == "nng":
-        server_type = NngRpcServer
-    elif backend == "zmq":
-        server_type = ZmqRpcServer
-    else:
+def make_server(endpoint: str, camera: CameraSupervisor, *, backend: str = "nng"):
+    server_type = {"nng": NngRpcServer, "zmq": ZmqRpcServer}.get(backend)
+    if server_type is None:
         raise ValueError(f"unsupported RPC backend: {backend!r}")
 
     server = server_type.bind(endpoint)
-    add_camera_rpc(server, camera, logger=LOG)
+    add_rpc(server, CameraInterface, CameraService(camera, LOG))
     return server
 
 
@@ -54,13 +35,12 @@ def run_server(
     *,
     backend: str = "nng",
     discovery: FilesystemDiscovery | None = None,
-    service: str = CAMERA_API.service,
+    service: str = CameraInterface.service,
     instance_id: str | None = None,
     advertise_endpoint: str | None = None,
     device: str = "",
     auto_open: bool = True,
 ) -> None:
-    """Run the resilient camera service, optionally registered for discovery."""
     STOP.clear()
     camera = CameraSupervisor(
         DaiStereoCameraStream(device_ip=device),
@@ -73,17 +53,17 @@ def run_server(
         while not STOP.is_set():
             try:
                 raw_server = make_server(endpoint, camera, backend=backend)
-
-                if discovery is None:
-                    server = raw_server
-                else:
-                    server = DiscoveredRpcServer(
+                server = (
+                    raw_server
+                    if discovery is None
+                    else DiscoveredRpcServer(
                         service,
                         raw_server,
                         discovery,
                         instance_id=instance_id or service,
                         advertise_endpoint=advertise_endpoint,
                     )
+                )
 
                 LOG.info(
                     "%s camera server listening on %s%s",
@@ -98,7 +78,6 @@ def run_server(
 
                 with server:
                     server.serve_forever()
-
                 if not STOP.is_set():
                     raise RuntimeError("RPC serve_forever returned unexpectedly")
 
