@@ -9,7 +9,8 @@ from fastapi import FastAPI, HTTPException
 
 from discovery_sum import SumRequest, SumResponse
 from npb_rpc import FilesystemDiscovery
-from server_dai.interface import CameraInterface, RpcTarget, add_routes as add_dai_routes
+from server_dai.interface import CameraInterface, RpcTarget, add_camera_routes
+from server_yolo.interface import YoloInterface, add_yolo_routes
 
 app = FastAPI(title="Discovered RPC Web API")
 _registry = os.getenv("RPC_REGISTRY") or os.getenv("CAMERA_REGISTRY")
@@ -18,9 +19,18 @@ DYNAMIC_PREFIX = "dynamic:"
 
 
 def add_camera_service_routes(service: str, name: str) -> None:
-    add_dai_routes(
+    add_camera_routes(
         app,
-        CameraInterface,
+        discovery=DISCOVERY,
+        service=service,
+        server_name=name,
+        route_name_prefix=DYNAMIC_PREFIX,
+    )
+
+
+def add_yolo_service_routes(service: str, name: str) -> None:
+    add_yolo_routes(
+        app,
         discovery=DISCOVERY,
         service=service,
         server_name=name,
@@ -62,6 +72,7 @@ def add_sum_routes(service: str, name: str) -> None:
 
 SERVICE_BUILDERS = {
     CameraInterface.service: add_camera_service_routes,
+    YoloInterface.service: add_yolo_service_routes,
     "sum": add_sum_routes,
 }
 

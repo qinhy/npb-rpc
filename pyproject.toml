@@ -46,10 +46,12 @@ zmq = [
 [dependency-groups]
 dev = [
     "fastapi>=0.141.1",
+    "opencv-python>=5.0.0.93",
     "pynng>=0.9,<1",
     "pytest>=8",
     "pyzmq>=27.0",
     "ruff>=0.8",
+    "ultralytics>=8.4.150",
     "uvicorn>=0.52.4",
 ]
 
