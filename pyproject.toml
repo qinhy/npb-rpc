@@ -59,10 +59,10 @@ dev = [
     "timm>=1.0.29",
     "imageio>=2.37.4",
     "omegaconf>=2.3.1",
-    
     # torch.compile / Triton
     "triton>=3.8,<3.9; sys_platform == 'linux'",
     "triton-windows>=3.8,<3.9; sys_platform == 'win32'",
+    "rich>=15.0.0",
 ]
 
 [tool.uv.sources]

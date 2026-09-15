@@ -2,12 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import multiprocessing as mp
+from multiprocessing.connection import Connection
 import random
 import threading
 import time
+import traceback
 from typing import Callable, Generic, Protocol, TypeVar
 
 TTarget = TypeVar("TTarget")
+
+
+class _EventLike(Protocol):
+    def is_set(self) -> bool: ...
+
+    def set(self) -> None: ...
+
+    def wait(self, timeout: float | None = None) -> bool: ...
 
 
 class SessionState(str, Enum):
@@ -92,12 +103,14 @@ class SessionControl:
         self,
         *,
         revision: int,
-        cancel_event: threading.Event,
+        cancel_event: _EventLike,
         mark_ready_cb: Callable[[int], bool],
+        emit_cb: Callable[[int, object], bool] | None = None,
     ) -> None:
         self._revision = revision
         self._cancel_event = cancel_event
         self._mark_ready_cb = mark_ready_cb
+        self._emit_cb = emit_cb
         self._ready = False
         self._ready_lock = threading.Lock()
 
@@ -131,6 +144,17 @@ class SessionControl:
                 self._ready = True
             return accepted
 
+    def emit(self, payload: object) -> bool:
+        """Send one application event from the isolated worker to the parent.
+
+        The event travels over the worker's private pipe.  The pipe is created
+        fresh for every session attempt, so a native worker crash cannot poison
+        the IPC channel used by a later retry.
+        """
+        if self._emit_cb is None:
+            return False
+        return self._emit_cb(self._revision, payload)
+
 
 class SessionHandler(Protocol[TTarget]):
     """Application-specific implementation of one resource session."""
@@ -155,11 +179,127 @@ class SessionSupersededError(RuntimeError):
     pass
 
 
+class WorkerProcessError(RuntimeError):
+    """A session worker process exited abnormally."""
+
+    def __init__(self, exitcode: int | None) -> None:
+        self.exitcode = exitcode
+        super().__init__(f"session worker exited abnormally ({_format_exitcode(exitcode)})")
+
+
+class RemoteSessionError(RuntimeError):
+    """Python exception raised by ``SessionHandler.run`` in the worker process."""
+
+    def __init__(self, exc_type: str, message: str, remote_traceback: str) -> None:
+        self.exc_type = exc_type
+        self.message = message
+        self.remote_traceback = remote_traceback
+        text = f"{exc_type}: {message}" if message else exc_type
+        super().__init__(text)
+
+
+def _format_exitcode(exitcode: int | None) -> str:
+    if exitcode is None:
+        return "exitcode=None"
+    # On Windows a native access violation is commonly 0xC0000005.  Depending
+    # on the Python/runtime path it may be surfaced as a signed or unsigned int.
+    unsigned = exitcode & 0xFFFFFFFF
+    if unsigned >= 0x80000000:
+        return f"exitcode={exitcode} (0x{unsigned:08X})"
+    return f"exitcode={exitcode}"
+
+
+def _session_process_main(
+    handler: SessionHandler[TTarget],
+    target: TTarget,
+    revision: int,
+    cancel_event: _EventLike,
+    control_conn: Connection,
+) -> None:
+    """Run exactly one session in an isolated child process.
+
+    This function intentionally lives at module scope so the ``spawn`` start
+    method can import/pickle it on Windows.  Only small control messages cross
+    the pipe; application data should use its own IPC/shared-memory transport.
+    """
+
+    send_lock = threading.Lock()
+
+    def send_message(message: tuple[object, ...]) -> bool:
+        try:
+            with send_lock:
+                control_conn.send(message)
+            return True
+        except (EOFError, BrokenPipeError, OSError):
+            return False
+
+    def mark_ready(rev: int) -> bool:
+        if cancel_event.is_set():
+            return False
+        if not send_message(("ready", rev)):
+            return False
+        try:
+            while not cancel_event.is_set():
+                if control_conn.poll(0.1):
+                    message = control_conn.recv()
+                    if (
+                        isinstance(message, tuple)
+                        and len(message) >= 3
+                        and message[0] == "ready_ack"
+                        and message[1] == rev
+                    ):
+                        return bool(message[2])
+            return False
+        except (EOFError, BrokenPipeError, OSError):
+            return False
+
+    def emit(rev: int, payload: object) -> bool:
+        return send_message(("event", rev, payload))
+
+    control = SessionControl(
+        revision=revision,
+        cancel_event=cancel_event,
+        mark_ready_cb=mark_ready,
+        emit_cb=emit,
+    )
+
+    try:
+        handler.run(target, control)
+        try:
+            send_message(("returned",))
+        except (EOFError, BrokenPipeError, OSError):
+            pass
+    except BaseException as exc:
+        # Send strings only: arbitrary exception objects are not guaranteed to be
+        # picklable, especially when third-party native extensions are involved.
+        try:
+            send_message(
+                (
+                    "error",
+                    type(exc).__name__,
+                    str(exc),
+                    "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+                )
+            )
+        except (EOFError, BrokenPipeError, OSError):
+            pass
+        # Preserve a non-zero exit status without dumping a duplicate traceback
+        # to stderr; the parent already received the formatted remote traceback.
+        raise SystemExit(1) from None
+    finally:
+        try:
+            control_conn.close()
+        except OSError:
+            pass
+
+
 class SessionSupervisor(Generic[TTarget]):
     """Supervise one replaceable, restartable long-lived session.
 
     The supervisor continuously reconciles *desired state* (open/closed and the
-    requested target) with one actual session owned by a background thread.
+    requested target) in a background thread, while each actual session runs in
+    an isolated child process.  Native crashes in third-party extensions therefore
+    terminate only the session worker, not the parent application.
     """
 
     def __init__(
@@ -168,9 +308,17 @@ class SessionSupervisor(Generic[TTarget]):
         *,
         retry: RetryPolicy | None = None,
         auto_start: bool = False,
+        process_start_method: str = "spawn",
+        cancel_grace_period: float = 2.0,
+        terminate_grace_period: float = 1.0,
+        on_event: Callable[[TTarget, int, object], None] | None = None,
     ) -> None:
         self._handler = handler
         self._retry = retry or RetryPolicy()
+        self._on_event = on_event
+        self._mp_context = mp.get_context(process_start_method)
+        self._cancel_grace_period = max(0.0, cancel_grace_period)
+        self._terminate_grace_period = max(0.0, terminate_grace_period)
 
         self._cv = threading.Condition()
         self._thread_lock = threading.Lock()
@@ -183,7 +331,7 @@ class SessionSupervisor(Generic[TTarget]):
         self._state = SessionState.CLOSED
         self._active_target: TTarget | None = None
         self._session_active = False
-        self._session_cancel: threading.Event | None = None
+        self._session_cancel: _EventLike | None = None
 
         self._generation = 0
         self._restart_count = 0
@@ -423,7 +571,7 @@ class SessionSupervisor(Generic[TTarget]):
 
                 revision = self._revision
                 target = self._desired_target
-                cancel = threading.Event()
+                cancel = self._mp_context.Event()
                 self._session_cancel = cancel
                 self._session_active = True
                 self._active_target = target
@@ -431,29 +579,167 @@ class SessionSupervisor(Generic[TTarget]):
                 self._error = None
                 self._cv.notify_all()
 
-            control = SessionControl(
-                revision=revision,
-                cancel_event=cancel,
-                mark_ready_cb=self._mark_ready,
+            parent_conn, child_conn = self._mp_context.Pipe(duplex=True)
+            process = self._mp_context.Process(
+                target=_session_process_main,
+                args=(self._handler, target, revision, cancel, child_conn),
+                name=f"session-worker-{revision}",
+                daemon=True,
             )
 
             failure: BaseException | None = None
+            process_started = False
+            worker_returned = False
+            cancel_seen_at: float | None = None
+            terminate_seen_at: float | None = None
+            terminated_by_supervisor = False
+
             try:
-                # target cannot be None here unless the caller intentionally uses
-                # None as TTarget.  Runtime behavior is still valid in that case.
-                self._handler.run(target, control)  # type: ignore[arg-type]
+                try:
+                    process.start()
+                    process_started = True
+                except BaseException as exc:
+                    failure = exc
+                finally:
+                    # The parent must not keep the child's pipe endpoint open;
+                    # otherwise EOF cannot be observed when the child dies.
+                    try:
+                        child_conn.close()
+                    except OSError:
+                        pass
+
+                while failure is None and process.is_alive():
+                    # Handle all currently queued child -> parent messages.
+                    while parent_conn.poll(0):
+                        try:
+                            message = parent_conn.recv()
+                        except (EOFError, OSError):
+                            break
+
+                        if not isinstance(message, tuple) or not message:
+                            continue
+
+                        kind = message[0]
+                        if kind == "ready" and len(message) >= 2:
+                            ready_revision = int(message[1])
+                            accepted = self._mark_ready(ready_revision)
+                            try:
+                                parent_conn.send(("ready_ack", ready_revision, accepted))
+                            except (EOFError, BrokenPipeError, OSError):
+                                pass
+                        elif kind == "event" and len(message) >= 3:
+                            event_revision = int(message[1])
+                            if event_revision == revision and self._on_event is not None:
+                                self._on_event(target, event_revision, message[2])
+                        elif kind == "error" and len(message) >= 4:
+                            failure = RemoteSessionError(
+                                str(message[1]),
+                                str(message[2]),
+                                str(message[3]),
+                            )
+                        elif kind == "returned":
+                            worker_returned = True
+
+                    # open(B), close_session(), or shutdown() sets this event.
+                    # Give the handler a chance to release its resource cleanly,
+                    # then force the worker down if a native call is hung.
+                    if cancel.is_set():
+                        now = time.monotonic()
+                        if cancel_seen_at is None:
+                            cancel_seen_at = now
+                        elif (
+                            not terminated_by_supervisor
+                            and now - cancel_seen_at >= self._cancel_grace_period
+                        ):
+                            process.terminate()
+                            terminated_by_supervisor = True
+                            terminate_seen_at = now
+                        elif (
+                            terminated_by_supervisor
+                            and terminate_seen_at is not None
+                            and now - terminate_seen_at >= self._terminate_grace_period
+                            and process.is_alive()
+                        ):
+                            kill = getattr(process, "kill", None)
+                            if kill is not None:
+                                kill()
+                            terminate_seen_at = now
+
+                    process.join(timeout=0.05)
+
+                # Process may have exited between poll cycles.  Drain any final
+                # READY/ERROR/RETURNED message before classifying the exit.
+                while failure is None and parent_conn.poll(0):
+                    try:
+                        message = parent_conn.recv()
+                    except (EOFError, OSError):
+                        break
+                    if not isinstance(message, tuple) or not message:
+                        continue
+                    kind = message[0]
+                    if kind == "ready" and len(message) >= 2:
+                        ready_revision = int(message[1])
+                        accepted = self._mark_ready(ready_revision)
+                        try:
+                            parent_conn.send(("ready_ack", ready_revision, accepted))
+                        except (EOFError, BrokenPipeError, OSError):
+                            pass
+                    elif kind == "event" and len(message) >= 3:
+                        event_revision = int(message[1])
+                        if event_revision == revision and self._on_event is not None:
+                            self._on_event(target, event_revision, message[2])
+                    elif kind == "error" and len(message) >= 4:
+                        failure = RemoteSessionError(
+                            str(message[1]), str(message[2]), str(message[3])
+                        )
+                    elif kind == "returned":
+                        worker_returned = True
+
+                if process_started:
+                    process.join(timeout=0)
+
                 with self._cv:
-                    still_desired = (
-                        self._desired_open
-                        and self._revision == revision
-                        and self._desired_target == target
-                        and not cancel.is_set()
-                        and not self._stop_event.is_set()
+                    intentional = (
+                        self._stop_event.is_set()
+                        or cancel.is_set()
+                        or not self._desired_open
+                        or self._revision != revision
+                        or self._desired_target != target
                     )
-                if still_desired:
-                    failure = RuntimeError("session handler returned unexpectedly")
-            except BaseException as exc:
-                failure = exc
+
+                if not intentional and failure is None:
+                    if process.exitcode not in (0, None):
+                        failure = WorkerProcessError(process.exitcode)
+                    elif worker_returned or process.exitcode == 0:
+                        failure = RuntimeError("session handler returned unexpectedly")
+                    else:
+                        failure = RuntimeError("session worker ended unexpectedly")
+
+            finally:
+                try:
+                    parent_conn.close()
+                except OSError:
+                    pass
+                if process_started and process.is_alive():
+                    # This path is mainly for unexpected errors in the supervisor
+                    # itself.  Never leave an orphan resource process behind.
+                    try:
+                        process.terminate()
+                    except (OSError, ValueError):
+                        pass
+                    process.join(timeout=self._terminate_grace_period)
+                    if process.is_alive():
+                        kill = getattr(process, "kill", None)
+                        if kill is not None:
+                            try:
+                                kill()
+                            except (OSError, ValueError):
+                                pass
+                        process.join(timeout=self._terminate_grace_period)
+                try:
+                    process.close()
+                except (OSError, ValueError):
+                    pass
 
             with self._cv:
                 intentional = (
@@ -481,20 +767,19 @@ class SessionSupervisor(Generic[TTarget]):
                     continue
 
                 if failure is None:
-                    # Defensive fallback; normally converted to RuntimeError above.
                     failure = RuntimeError("session ended unexpectedly")
 
                 self._restart_count += 1
                 self._retry_attempt += 1
                 attempt = self._retry_attempt
                 self._error = f"{type(failure).__name__}: {failure}"
+                if isinstance(failure, RemoteSessionError) and failure.remote_traceback:
+                    self._error += f"\n{failure.remote_traceback}"
                 self._active_target = None
 
                 if not self._retry.allows(attempt):
                     self._state = SessionState.FAILED
                     self._cv.notify_all()
-                    # Stay idle until open() creates a fresh revision, target changes,
-                    # close_session(), or shutdown().
                     while (
                         self._desired_open
                         and self._revision == revision
@@ -508,7 +793,6 @@ class SessionSupervisor(Generic[TTarget]):
                 delay = self._retry.delay_for(attempt)
                 self._cv.notify_all()
 
-                # Condition.wait() makes retry sleep interruptible by close/switch.
                 if delay > 0:
                     self._cv.wait(delay)
 

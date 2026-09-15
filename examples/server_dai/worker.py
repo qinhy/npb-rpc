@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import os
+
+# These must be set before DepthAI is imported in the worker process.
+os.environ["DEPTHAI_CRASHDUMP"] = "0"
+os.environ["DEPTHAI_CRASHDUMP_TIMEOUT"] = "0"
+os.environ["DEPTHAI_DISABLE_CRASHDUMP_COLLECTION"] = "1"
+
 from contextlib import suppress
 from dataclasses import dataclass
 import logging
@@ -7,15 +14,22 @@ import threading
 import time
 from typing import Any, Generic, Literal, TypeVar
 
-import depthai as dai
-from depthai_camera_stream import CameraStream
-
 try:
     from .msg import CameraCalibrationResponse, CameraStatusResponse
-    from .session_supervisor import RetryPolicy, SessionControl, SessionSupersededError, SessionSupervisor
+    from .session_supervisor import (
+        RetryPolicy,
+        SessionControl,
+        SessionSupersededError,
+        SessionSupervisor,
+    )
 except ImportError:  # Support running files directly from one directory.
     from msg import CameraCalibrationResponse, CameraStatusResponse
-    from session_supervisor import RetryPolicy, SessionControl, SessionSupersededError, SessionSupervisor
+    from session_supervisor import (
+        RetryPolicy,
+        SessionControl,
+        SessionSupersededError,
+        SessionSupervisor,
+    )
 
 
 LOG = logging.getLogger("nng_dai_camera")
@@ -44,7 +58,7 @@ class CameraStoreSnapshot(Generic[TCalibration]):
 
 
 class CameraFrameStore(Generic[TCalibration]):
-    """Thread-safe frame/calibration cache guarded by supervisor revision."""
+    """Parent-process frame/calibration cache guarded by supervisor revision."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -86,8 +100,15 @@ class CameraFrameStore(Generic[TCalibration]):
             if self._active_revision == revision:
                 self._active_revision = None
 
-    def publish(self, key: str, jpeg: bytes, *, revision: int) -> bool:
-        now_ns = time.time_ns()
+    def publish(
+        self,
+        key: str,
+        jpeg: bytes,
+        *,
+        revision: int,
+        captured_ns: int | None = None,
+    ) -> bool:
+        now_ns = time.time_ns() if captured_ns is None else int(captured_ns)
         with self._lock:
             if self._active_revision != revision:
                 return False
@@ -126,7 +147,11 @@ class CameraFrameStore(Generic[TCalibration]):
 
 @dataclass
 class DaiStereoCameraStream:
-    """DepthAI RGB + stereo stream configuration."""
+    """DepthAI RGB + stereo stream configuration.
+
+    Important: this object stays picklable.  DepthAI and CameraStream are imported
+    only when build() runs inside the isolated session process.
+    """
 
     device_ip: str = ""
     rgb_size: tuple[int, int] = (3872, 3008)
@@ -137,7 +162,10 @@ class DaiStereoCameraStream:
     resize_mode: str = "CROP"
     max_exposure_us: int = 16667
 
-    def build(self, pipeline: dai.Pipeline) -> dict[str, Any]:
+    def build(self, pipeline: Any) -> dict[str, Any]:
+        import depthai as dai
+        from depthai_camera_stream import CameraStream
+
         common = dict(
             pipeline=pipeline,
             fps=self.fps,
@@ -158,38 +186,52 @@ class DaiStereoCameraStream:
             "right": (dai.CameraBoardSocket.CAM_C, self.stereo_size, self.mjpeg_quality - 5),
         }
         return {
-            name: CameraStream(name=name, socket=socket, size=size, mjpeg_quality=quality, **common).build()
+            name: CameraStream(
+                name=name,
+                socket=socket,
+                size=size,
+                mjpeg_quality=quality,
+                **common,
+            ).build()
             for name, (socket, size, quality) in specs.items()
         }
 
 
 class DepthAISessionHandler:
-    """Own one DepthAI session; retry/switch policy stays in SessionSupervisor."""
+    """Own exactly one DepthAI session inside the isolated worker process.
+
+    Do not put CameraFrameStore, locks, Device, Pipeline, or queues on this object.
+    SessionSupervisor must be able to pickle this handler on Windows spawn.
+    """
 
     def __init__(
         self,
         config: DaiStereoCameraStream,
-        store: CameraFrameStore[CameraCalibrationResponse],
         *,
         idle_wait: float = 0.002,
     ) -> None:
         self.config = config
-        self.store = store
         self.idle_wait = max(0.0, float(idle_wait))
 
     def run(self, device: str, control: SessionControl) -> None:
+        # Import DepthAI only in the child process.
+        import depthai as dai
+
         revision = control.revision
-        pipeline: dai.Pipeline | None = None
+        pipeline: Any | None = None
         device_handle: Any | None = None
         streams: dict[str, Any] = {}
-        pipeline_started = session_failed = False
+        pipeline_started = False
+        session_failed = False
 
-        if not self.store.activate(revision):
+        # Tell the parent which revision may write to its local CameraFrameStore.
+        if not control.emit(("activate",)):
             return
 
         try:
             label = device or "automatic device"
             LOG.info("opening DepthAI device %r", label)
+
             if device:
                 device_handle = dai.Device(dai.DeviceInfo(device))
                 pipeline = dai.Pipeline(device_handle)
@@ -207,17 +249,22 @@ class DepthAISessionHandler:
             )
             calibration.rgb_resolution = self.config.rgb_size
             calibration.left_resolution = self.config.stereo_size
-            calibration.right_resolution = self.config.stereo_size            
-            self.store.set_calibration(calibration, revision=revision)
+            calibration.right_resolution = self.config.stereo_size
+
+            if not control.emit(("calibration", calibration)):
+                return
+
             if control.cancelled:
                 return
 
             pipeline.start()
             pipeline_started = True
+
             if not control.mark_ready():
                 return
 
             LOG.info("DepthAI pipeline started for %s (revision %d)", label, revision)
+
             while not control.cancelled:
                 if not pipeline.isRunning():
                     raise RuntimeError("DepthAI pipeline is no longer running")
@@ -226,39 +273,62 @@ class DepthAISessionHandler:
                 for name in VALID_STREAMS:
                     if control.cancelled:
                         break
+
                     stream = streams[name]
                     for key, thumbnail in ((name, False), (f"{name}.thumbnail", True)):
+                        if control.cancelled:
+                            break
+
                         packet = (
                             stream.read_latest(thumbnail=True, block=False)
                             if thumbnail
                             else stream.read_latest(block=False)
                         )
-                        if packet is not None:
-                            self.store.publish(key, bytes(packet.getData()), revision=revision)
-                            got_packet = True
+                        if packet is None:
+                            continue
+
+                        # The worker's private pipe is created fresh for every
+                        # session attempt. A crash therefore cannot corrupt the
+                        # transport used by the next retry.
+                        if not control.emit(
+                            (
+                                "frame",
+                                key,
+                                bytes(packet.getData()),
+                                time.time_ns(),
+                            )
+                        ):
+                            return
+                        got_packet = True
 
                 if not got_packet:
                     control.wait_cancelled(self.idle_wait)
 
         except BaseException:
-            # After native DepthAI failure, avoid more device API calls in cleanup.
+            # After a DepthAI/Python failure, avoid extra native API calls in the
+            # cleanup path. Native access violations bypass this block entirely;
+            # the parent SessionSupervisor detects the process exit code.
             session_failed = True
             raise
         finally:
-            self.store.deactivate(revision)
-            streams.clear()  # Release queue wrappers before Pipeline/Device.
+            # emit() is intentionally allowed during cancellation so normal
+            # cleanup can deactivate the parent-side store.
+            control.emit(("deactivate",))
+
+            streams.clear()
             if pipeline is not None and pipeline_started and not session_failed:
                 with suppress(Exception):
                     pipeline.stop()
                 with suppress(Exception):
                     pipeline.wait()
+
             # Preserve explicit release order; do not call device_handle.close().
             pipeline = None
             device_handle = None
 
 
 class CameraSupervisor:
-    """Camera-facing compatibility façade over SessionSupervisor."""
+    """Camera-facing compatibility façade over process-isolated SessionSupervisor."""
 
     _STATE_ERRORS = {
         "closed": "camera closed",
@@ -277,8 +347,14 @@ class CameraSupervisor:
     ) -> None:
         self.config = config
         self.reconnect_delay = max(0.05, float(reconnect_delay))
+
+        # This store stays ONLY in the parent process.
         self.store: CameraFrameStore[CameraCalibrationResponse] = CameraFrameStore()
-        self.handler = DepthAISessionHandler(config, self.store)
+
+        # The handler is deliberately lightweight/picklable.  It does not contain
+        # self.store or any threading lock.
+        self.handler = DepthAISessionHandler(config)
+
         self.supervisor: SessionSupervisor[str] = SessionSupervisor(
             self.handler,
             retry=RetryPolicy(
@@ -287,9 +363,42 @@ class CameraSupervisor:
                 max_delay=self.reconnect_delay,
                 max_attempts=None,
             ),
+            process_start_method="spawn",
+            on_event=self._on_session_event,
         )
+
         self._default_device = config.device_ip.strip()
         self._auto_open_pending = bool(auto_open)
+
+    def _on_session_event(self, device: str, revision: int, event: object) -> None:
+        """Runs in the parent supervisor thread, never in the DepthAI process."""
+        if not isinstance(event, tuple) or not event:
+            return
+
+        kind = event[0]
+        if kind == "activate":
+            self.store.activate(revision)
+            return
+
+        if kind == "deactivate":
+            self.store.deactivate(revision)
+            return
+
+        if kind == "calibration" and len(event) >= 2:
+            self.store.set_calibration(event[1], revision=revision)
+            return
+
+        if kind == "frame" and len(event) >= 4:
+            key = str(event[1])
+            jpeg = event[2]
+            captured_ns = int(event[3])
+            if isinstance(jpeg, (bytes, bytearray, memoryview)):
+                self.store.publish(
+                    key,
+                    bytes(jpeg),
+                    revision=revision,
+                    captured_ns=captured_ns,
+                )
 
     def _invalidate(self, revision: int, *, clear: bool) -> None:
         self.store.invalidate(
@@ -326,18 +435,36 @@ class CameraSupervisor:
             status = self.supervisor.open(target, timeout=timeout_s)
         except SessionSupersededError:
             status = self.supervisor.status()
-            return False, status.online, target, status.generation, "camera open request was superseded"
+            return (
+                False,
+                status.online,
+                target,
+                status.generation,
+                "camera open request was superseded",
+            )
         except TimeoutError:
             status = self.supervisor.status()
             detail = self._camera_error(status) or "camera did not become online"
-            return False, status.online, target, status.generation, f"open timed out after {timeout_s:g}s: {detail}"
+            return (
+                False,
+                status.online,
+                target,
+                status.generation,
+                f"open timed out after {timeout_s:g}s: {detail}",
+            )
         except RuntimeError as exc:
             status = self.supervisor.status()
             return False, status.online, target, status.generation, str(exc)
 
         if status.online and status.active_target == target:
             return True, True, target, status.generation, ""
-        return False, status.online, target, status.generation, status.error or f"camera state is {status.state.value}"
+        return (
+            False,
+            status.online,
+            target,
+            status.generation,
+            status.error or f"camera state is {status.state.value}",
+        )
 
     def close_camera(self, *, timeout_s: float = 5.0) -> CameraActionResult:
         """Close the camera session while keeping the supervisor/RPC service alive."""
@@ -351,7 +478,10 @@ class CameraSupervisor:
             status = self.supervisor.close_session(timeout=timeout_s)
         except TimeoutError:
             status = self.supervisor.status()
-            error = f"close timed out after {timeout_s:g}s; device shutdown is still in progress"
+            error = (
+                f"close timed out after {timeout_s:g}s; "
+                "device shutdown is still in progress"
+            )
             return False, False, target, status.generation, error
         return True, False, target, status.generation, ""
 
@@ -394,7 +524,11 @@ class CameraSupervisor:
         return CameraStatusResponse(
             requested_open=status.desired_open or self._auto_open_pending,
             online=status.online,
-            device=status.desired_target if status.desired_target is not None else self._default_device,
+            device=(
+                status.desired_target
+                if status.desired_target is not None
+                else self._default_device
+            ),
             generation=status.generation,
             restart_count=status.restart_count,
             frames_published=data.frames_published,

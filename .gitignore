@@ -13,3 +13,6 @@ examples/server_test.py
 /recordings
 examples/store/.env
 run_all.bat
+run_rgbd_hand.bat
+run_rgbd_left.bat
+run_rgbd_right.bat
