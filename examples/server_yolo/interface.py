@@ -105,29 +105,17 @@ class YoloInterface(Protocol):
     service = "yolo"
 
     @api("yolo.inference", "POST", "inference")
-    def inference(
-        self,
-        request: YoloInferenceRequest,
-    ) -> YoloInferenceSubmitResponse: ...
-
+    def inference(self,request: YoloInferenceRequest)->YoloInferenceSubmitResponse:
+        ...    
     @api("yolo.job_status", "GET", "job_status")
-    def job_status(
-        self,
-        request: YoloJobRequest,
-    ) -> YoloJobStatusResponse: ...
-
+    def job_status(self,request: YoloJobRequest)->YoloJobStatusResponse:
+        ...    
     @api("yolo.job_result", "GET", "job_result")
-    def job_result(
-        self,
-        request: YoloJobRequest,
-    ) -> YoloJobResultResponse: ...
-
+    def job_result(self,request: YoloJobRequest)->YoloJobResultResponse:
+        ...    
     @api("yolo.status", "GET", "status")
-    def status(
-        self,
-        request: EmptyRequest,
-    ) -> YoloStatusResponse: ...
-
+    def status(self,request: EmptyRequest)->YoloStatusResponse:
+        ...    
 
 
 class YoloService(YoloInterface):

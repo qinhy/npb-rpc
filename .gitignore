@@ -10,3 +10,6 @@ __pycache__/
 .python-version
 /fast-foundationstereo
 examples/server_test.py
+/recordings
+examples/store/.env
+run_all.bat

@@ -85,7 +85,7 @@ SERVICE_BUILDERS = {
     CameraInterface.service: add_camera_service_routes,
     YoloInterface.service: add_yolo_service_routes,
     PcdInterface.service: add_pcd_service_routes,
-    "sum": add_sum_routes,
+    # "sum": add_sum_routes,
 }
 
 

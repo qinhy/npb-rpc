@@ -205,6 +205,9 @@ class DepthAISessionHandler:
                 camera_online=True,
                 **next(iter(streams.values())).read_calibration_dict(),
             )
+            calibration.rgb_resolution = self.config.rgb_size
+            calibration.left_resolution = self.config.stereo_size
+            calibration.right_resolution = self.config.stereo_size            
             self.store.set_calibration(calibration, revision=revision)
             if control.cancelled:
                 return
