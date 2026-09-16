@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import logging
+from servers.logger import logging
 import time
 from pathlib import Path
 
@@ -26,7 +26,7 @@ from servers.msg.pcd import (
 from servers.server_pcd.server import run_server
 
 
-LOG = logging.getLogger("npb_rpc_pcd")
+LOG = logging.getLogger(__name__.replace(".",":"))
 DEFAULT_SERVICE = PcdInterface.service
 TERMINAL_STATES = {"succeeded", "failed", "cancelled"}
 
@@ -280,7 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     # RPC / discovery
     add("--service", default=DEFAULT_SERVICE)
     add("--server-name", help="instance id to advertise (server) or select (client)")
-    add("--backend", choices=("nng", "zmq", "iceoryx2"), default="iceoryx2", help="RPC backend")
+    add("--backend", choices=("nng", "zmq", "iceoryx2"), default="nng", help="RPC backend")
     add("--transport", choices=("tcp", "ipc"), default="ipc")
     add("--host", default="127.0.0.1")
     add("--endpoint", default=None)

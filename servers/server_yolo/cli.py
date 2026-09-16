@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import logging
+from servers.logger import logging
 import time
 from pathlib import Path
 
@@ -19,7 +19,7 @@ from servers.msg.yolo import EmptyRequest, YoloInferenceRequest, YoloJobRequest,
 from servers.server_yolo.server import run_server
 
 
-LOG = logging.getLogger("npb_rpc_yolo")
+LOG = logging.getLogger(__name__.replace(".",":"))
 DEFAULT_SERVICE = YoloInterface.service
 TERMINAL_STATES = {"succeeded", "failed", "cancelled"}
 

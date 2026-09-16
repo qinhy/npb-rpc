@@ -15,6 +15,9 @@ from servers.server_pcd.disparity_predictors import (DisparityPredictor,
                                 FastFoundationStereoDisparity,
                                 SGBMDisparityPredictorCuda,
                                 VPIStereoDisparityGPU)
+
+from servers.logger import logging
+LOG = logging.getLogger(__name__.replace(".",":"))
     
 ColorOrder = Literal['RGB', 'BGR']
 TranslationUnit = Literal['m', 'cm', 'mm']
@@ -367,7 +370,7 @@ class StereoRectifier:
         cal = self.calibration.as_ops(NumpyMatOps())
         self.image_size = size
         if size != cal.left_resolution:
-            print('[Warning]: Input size differs from calibration; intrinsics are scaled.')
+            LOG.warning('Input size differs from calibration; intrinsics are scaled.')
         K1 = scale_K(cal.left_intrinsics, cal.left_resolution, size, cal.ops)
         K2 = scale_K(cal.right_intrinsics, cal.right_resolution, size, cal.ops)
         flags = cv2.CALIB_ZERO_DISPARITY if self.zero_disparity else 0
@@ -618,7 +621,7 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
         count = int(keep.sum())
 
         if count < min_points:
-            print(f"skip detection {detection_index}: {count} points ({detection.get('class_name', 'unknown')})")
+            LOG.info(f"skip detection {detection_index}: {count} points ({detection.get('class_name', 'unknown')})")
             continue
         if exclusive:
             claimed |= keep
@@ -640,11 +643,11 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
             "point_count": count,
             "pcd": filename,
         })
-        print(f"saved {output_dir / filename} ({count} points)")
+        LOG.info(f"saved {output_dir / filename} ({count} points)")
 
     if save_full_cloud:
         save_pcd(output_dir / "full.pcd", points_left, colors_rgb, binary=binary_pcd)
-        print(f"saved {output_dir / 'full.pcd'} ({len(points_left)} points)")
+        LOG.info(f"saved {output_dir / 'full.pcd'} ({len(points_left)} points)")
 
     if save_background:
         background = ~(claimed if exclusive else union)
@@ -657,7 +660,7 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
                 colors_rgb[background],
                 binary=binary_pcd,
             )
-            print(f"saved background ({count} points)")
+            LOG.info(f"saved background ({count} points)")
 
     return manifest
 

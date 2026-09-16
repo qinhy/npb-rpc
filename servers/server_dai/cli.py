@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import logging
+from servers.logger import logging
 from pathlib import Path
 
 from npb_rpc.utils import resolve_service_instance
@@ -18,7 +18,7 @@ from servers.msg.dai import CameraCloseRequest, CameraFrameRequest, CameraFrameS
 from servers.server_dai.server import run_server
 
 
-LOG = logging.getLogger("dai_camera")
+LOG = logging.getLogger(__name__.replace(".",":"))
 VALID_STREAMS = ("rgb", "left", "right")
 DEFAULT_SERVICE = CameraInterface.service
 

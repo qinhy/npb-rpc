@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Unified RPC + HTTP interface for the PCD service."""
 
-import logging
+from servers.logger import logging
 from typing import Any
 
 from npb_rpc.utils import add_fastapi_routes
@@ -20,7 +20,7 @@ from servers.msg.pcd import (
 from servers.server_pcd.worker import PcdWorker
 
 
-LOG = logging.getLogger("pcd.interface")
+LOG = logging.getLogger(__name__.replace(".",":"))
 
 
 class PcdService(PcdInterface):

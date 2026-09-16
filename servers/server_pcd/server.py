@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import logging
+from servers.logger import logging
 from pathlib import Path
 import threading
 from typing import Any, Mapping
@@ -16,7 +16,7 @@ from servers.msg.pcd import PcdInterface
 from servers.server_pcd.worker import PcdWorker
 
 
-LOG = logging.getLogger("npb_rpc_pcd")
+LOG = logging.getLogger(__name__.replace(".",":"))
 STOP = threading.Event()
 
 

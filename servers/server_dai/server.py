@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import logging
+from servers.logger import logging
 import threading
 
 from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer, Iceoryx2RpcServer
@@ -15,7 +15,7 @@ from servers.msg.dai import CameraInterface
 from servers.server_dai.worker import CameraSupervisor, DaiStereoCameraStream
 
 
-LOG = logging.getLogger("nng_dai_camera")
+LOG = logging.getLogger(__name__.replace(".",":"))
 STOP = threading.Event()
 
 

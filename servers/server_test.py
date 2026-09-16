@@ -19,8 +19,9 @@ from servers.msg.yolo import YoloInferenceRequest, YoloJobRequest, YoloInterface
 from servers.msg.pcd import PcdBuildRequest, PcdJobRequest, PcdInterface, PcdClient
 
 from servers.store.custom_record_store import CustomStore, PCDRecord
+from servers.logger import logging
 
-
+LOG = logging.getLogger(__name__.replace(".",":"))
 console = Console()
 
 

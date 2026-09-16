@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Unified RPC + HTTP interface for the DepthAI camera service."""
 
-import logging
+from servers.logger import logging
 from typing import Any
 
 import numpy as np
@@ -23,7 +23,7 @@ from servers.msg.dai import (
 )
 from servers.server_dai.worker import CameraSupervisor, FrameSnapshot
 
-LOG = logging.getLogger("dai_camera.interface")
+LOG = logging.getLogger(__name__.replace(".",":"))
 STREAMS = ("rgb", "left", "right")
 FRAME_KEYS = (*STREAMS, *(f"{name}.thumbnail" for name in STREAMS))
 

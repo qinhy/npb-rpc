@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Dict, List
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 
 from npb_rpc import FilesystemDiscovery
 
@@ -85,7 +87,26 @@ def refresh():
     return refresh_routes()
 
 
-refresh_routes()
+def last_ai_record()->List[Dict]:
+    pass
+
+
+def debug_get_file(path: str):
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {file_path}",
+        )
+    return FileResponse(file_path)
+
+
+def debug_yolo():
+    return FileResponse(
+        "yolo_debug.html",
+        media_type="text/html",
+    )
 
 if __name__ == "__main__":
+    refresh_routes()
     uvicorn.run(app, host="0.0.0.0", port=8000)

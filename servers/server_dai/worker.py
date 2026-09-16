@@ -9,7 +9,7 @@ os.environ["DEPTHAI_DISABLE_CRASHDUMP_COLLECTION"] = "1"
 
 from contextlib import suppress
 from dataclasses import dataclass
-import logging
+from servers.logger import logging
 import threading
 import time
 from typing import Any, Generic, Literal, TypeVar
@@ -23,7 +23,7 @@ from servers.server_dai.session_supervisor import (
 )
 
 
-LOG = logging.getLogger("nng_dai_camera")
+LOG = logging.getLogger(__name__.replace(".",":"))
 StreamName = Literal["rgb", "left", "right"]
 VALID_STREAMS: tuple[StreamName, ...] = ("rgb", "left", "right")
 TCalibration = TypeVar("TCalibration")

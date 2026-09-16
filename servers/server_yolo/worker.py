@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-import logging
+from servers.logger import logging
 from pathlib import Path
 from queue import Queue
 import threading
@@ -42,7 +42,7 @@ from servers.server_yolo.yolo_utils import (
 )
 
 
-LOG = logging.getLogger("npb_rpc_yolo")
+LOG = logging.getLogger(__name__.replace(".",":"))
 
 
 # ============================================================
@@ -463,8 +463,8 @@ class UltralyticsYoloDetector:
             postprocess_ms=postprocess_ms,
             total_ms=(time.perf_counter() - t_total) * 1000.0,
         )
-
-        return YoloDetectResult(
+        
+        res = YoloDetectResult(
             **request.model_dump(),
             task=task,
             image_width=image_w,
@@ -478,6 +478,17 @@ class UltralyticsYoloDetector:
             effective_detection_bbox_xyxy=effective_roi_box,
             timing=timing,
         )
+        LOG.info(f"{dict(
+            image_width=image_w,
+            image_height=image_h,
+            tile_size=tile_size,
+            tile_count=tile_count,
+            preprocess_ms=preprocess_ms,
+            inference_ms=inference_ms,
+            postprocess_ms=postprocess_ms,
+            total_ms=(time.perf_counter() - t_total) * 1000.0,
+        )}")
+        return res
 
     def _predict(
         self,
@@ -717,6 +728,7 @@ class YoloWorker:
             cache_hits=cache_hits,
             cache_misses=cache_misses,
             cached_models=cached_models,
+            last_job_id=jobs.last_inference_ms,
             last_inference_ns=jobs.last_inference_ns,
             last_inference_ms=jobs.last_inference_ms,
             error=jobs.error,

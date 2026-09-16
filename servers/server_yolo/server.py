@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import logging
+from servers.logger import logging
 from pathlib import Path
 import threading
 
@@ -16,7 +16,7 @@ from servers.msg.yolo import YoloInterface
 from servers.server_yolo.worker import YoloWorker
 
 
-LOG = logging.getLogger("nng_dai_yolo")
+LOG = logging.getLogger(__name__.replace(".",":"))
 STOP = threading.Event()
 
 

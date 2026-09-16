@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Unified RPC + HTTP interface for the YOLO service."""
 
-import logging
+from servers.logger import logging
 from typing import Any
 
 from npb_rpc.utils import add_fastapi_routes
@@ -20,7 +20,7 @@ from servers.msg.yolo import (
 from servers.server_yolo.worker import YoloWorker
 
 
-LOG = logging.getLogger("yolo.interface")
+LOG = logging.getLogger(__name__.replace(".",":"))
 
 
 class YoloService(YoloInterface):

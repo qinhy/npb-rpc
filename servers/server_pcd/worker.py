@@ -2,7 +2,7 @@ from __future__ import annotations
 from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass
 import json
-import logging
+from servers.logger import logging
 import os
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -45,7 +45,7 @@ from servers.server_pcd.pcd_calculation import (
 )
 
 
-LOG = logging.getLogger('npb_rpc_pcd')
+LOG = logging.getLogger(__name__.replace(".",":"))
 
 # --- Path helpers ---
 
