@@ -17,6 +17,7 @@ from ._errors import (
     RpcTransportError,
     ServiceNotFoundError,
 )
+from ._iceoryx2 import Iceoryx2RpcClient, Iceoryx2RpcServer
 from ._nng import NngRpcClient, NngRpcServer, portable_ipc, portable_tcp
 from ._protocol import PROTOCOL_VERSION, RpcContext, Status
 from ._service import DiscoveredRpcClient, DiscoveredRpcServer
@@ -31,6 +32,8 @@ __all__ = [
     "DiscoveryBackend",
     "DiscoveryError",
     "FilesystemDiscovery",
+    "Iceoryx2RpcClient",
+    "Iceoryx2RpcServer",
     "NngRpcClient",
     "NngRpcServer",
     "RemoteRpcError",

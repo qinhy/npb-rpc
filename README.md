@@ -5,11 +5,12 @@
 validation, zero-copy NumPy decode, preallocated-buffer support, and optional
 external blob stores.
 
-ZeroMQ and NNG transports are optional:
+ZeroMQ, NNG, and iceoryx2 transports are optional:
 
 ```bash
 pip install "npb-rpc[zmq]"
 pip install "npb-rpc[nng]"
+pip install "npb-rpc[iceoryx2]"
 ```
 
 Or, with uv:
@@ -17,6 +18,7 @@ Or, with uv:
 ```bash
 uv add "npb-rpc[zmq]"
 uv add "npb-rpc[nng]"
+uv add "npb-rpc[iceoryx2]"
 ```
 
 Each call is a two-frame ZeroMQ message:
@@ -141,6 +143,52 @@ To measure raw NNG IPC request/reply latency on the current platform:
 uv run python examples/benchmark_nng_ipc.py --count 10000 --size 64
 ```
 
+## iceoryx2 shared-memory backend
+
+Install `npb-rpc[iceoryx2]` to use the native iceoryx2 request/response transport
+on one machine. It uses the same typed `method()`, `register()`, and `call()`
+interfaces as the other backends:
+
+```python
+from npb_rpc import Iceoryx2RpcClient, Iceoryx2RpcServer
+
+server = Iceoryx2RpcServer.bind("iceoryx2://array-sum")
+# Register handlers, then run server.serve_forever() in the server process.
+client = Iceoryx2RpcClient.connect("iceoryx2://array-sum")
+```
+
+A bare name such as `array-sum` is also accepted. Names identify local
+shared-memory services, not TCP addresses or filesystem socket paths. Both
+processes must use compatible iceoryx2 configuration and have access to the same
+shared-memory resources. No broker is needed. The optional dependency targets
+iceoryx2 0.9.3; consult its [Python package](https://pypi.org/project/iceoryx2/)
+for available platform wheels.
+
+Run the complete example in two terminals:
+
+```bash
+uv run --extra iceoryx2 python examples/iceoryx2_sum.py server
+uv run --extra iceoryx2 python examples/iceoryx2_sum.py client
+```
+
+Each endpoint allows one server and up to 32 clients. Give each server instance
+its own endpoint when using discovery. A client serializes its calls; separate
+clients can call concurrently, while handlers execute serially. A client may
+start before its server and waits up to the call timeout. Once a request reaches
+a server it is never automatically retried. Timing out releases the client's
+pending response but does not cancel a running handler.
+
+`poll_interval` (seconds, default `0.001`) controls receive polling on both the
+client and server. `default_timeout`, `max_envelope_bytes`, `max_message_bytes`,
+`blob_store`, and `externalize_min_bytes` work as with the other transports.
+Use context managers or `close()` to release shared-memory resources; `stop()`
+wakes a waiting server loop.
+
+The transport uses shared memory, but this adapter copies encoded bytes into
+iceoryx2 loans and copies received bytes into Python-owned buffers before NPB
+decode. Returned arrays therefore remain valid after the next call or after
+closing the client. This is not end-to-end zero-copy RPC.
+
 ## Service discovery
 
 Discovery is a control plane only. A server publishes its endpoint and refreshes
@@ -153,7 +201,7 @@ server instance ---> FilesystemDiscovery <--- client
        +------------ direct RPC --------------+
 ```
 
-Wrap either concrete server with `DiscoveredRpcServer`:
+Wrap any concrete server with `DiscoveredRpcServer`:
 
 ```python
 from npb_rpc import (
@@ -181,7 +229,8 @@ server.serve_forever()
 ```
 
 The client only needs the logical service name. Discovery records include the
-endpoint and the `zmq` or `nng` backend, so both backends can share one registry:
+endpoint and the `zmq`, `nng`, or `iceoryx2` backend, so all backends can share
+one registry:
 
 ```python
 from npb_rpc import DiscoveredRpcClient, FilesystemDiscovery
@@ -214,7 +263,8 @@ registry is intended for processes on one machine; use a shared registry path
 or implement `DiscoveryBackend` for discovery across hosts. Keep a server's
 `heartbeat_interval` shorter than the registry's `heartbeat_timeout`.
 
-The combined example can advertise either backend over TCP or IPC:
+The combined example supports ZeroMQ and NNG over TCP or IPC, and iceoryx2
+over shared memory:
 
 ```bash
 uv run python examples/discovery_sum.py server --backend zmq --transport tcp
@@ -223,6 +273,9 @@ uv run python examples/discovery_sum.py list
 
 uv run python examples/discovery_sum.py server --backend nng --transport ipc
 uv run python examples/discovery_sum.py client
+
+uv run --extra iceoryx2 python examples/discovery_sum.py server --backend iceoryx2 --transport ipc
+uv run --extra iceoryx2 python examples/discovery_sum.py client
 ```
 
 Handlers may return structured failures:
@@ -257,8 +310,7 @@ to both hosts.
 ## Current scope
 
 Version 0.1 intentionally implements synchronous unary RPC. One client object
-serializes its calls because the underlying ZeroMQ and NNG sockets are
-stateful; create one client per calling thread for parallel calls. Server
+serializes its calls; create one client per calling thread for parallel calls. Server
 handlers are also dispatched serially in this first version.
 
 Planned follow-ups include an asyncio API, bounded concurrent server dispatch,
@@ -274,6 +326,9 @@ root, install the project and its development dependencies, then run the checks:
 uv sync --locked
 uv run pytest
 uv run ruff check .
+
+# Include the optional iceoryx2 integration tests
+uv run --extra iceoryx2 pytest
 ```
 
 After changing dependencies in `pyproject.toml`, refresh the lockfile with

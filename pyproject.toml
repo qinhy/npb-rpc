@@ -36,6 +36,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+iceoryx2 = [
+    "iceoryx2>=0.9.3,<0.10",
+]
 nng = [
     "pynng>=0.9,<1",
 ]
@@ -50,6 +53,7 @@ dev = [
     "pynng>=0.9,<1",
     "pytest>=8",
     "pyzmq>=27.0",
+    "iceoryx2>=0.9.3,<0.10",
     "ruff>=0.8",
     "ultralytics>=8.4.150",
     "uvicorn>=0.52.4",
