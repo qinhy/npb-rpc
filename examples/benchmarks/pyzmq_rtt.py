@@ -22,6 +22,7 @@ from _common import (
     parse_size,
     parse_sizes,
     print_results,
+    print_tail_note,
     warmup_for_count,
     write_csv,
 )
@@ -146,7 +147,7 @@ def main() -> None:
     parser.add_argument(
         "--target-bytes",
         type=parse_size,
-        default=parse_size("256M"),
+        default=parse_size("1G"),
         help="adaptive bytes per payload size when --count is omitted",
     )
     parser.add_argument("--min-count", type=int, default=25)
@@ -165,6 +166,7 @@ def main() -> None:
         max_count=args.max_count,
     )
     print_results(results)
+    print_tail_note(results)
     if args.csv:
         write_csv(args.csv, results)
 

@@ -18,6 +18,8 @@ examples/
     ├── pynng_rtt.py
     ├── pyzmq_rtt.py
     ├── rpc_rtt.py
+    ├── iceoryx2_rtt.py
+    ├── ndarray_throughput.py
     └── pynng_ipc_rtt.py
 ```
 
@@ -175,7 +177,24 @@ uv run --extra iceoryx2 python examples/benchmarks/rpc_rtt.py \
   --csv benchmark_results.csv
 ```
 
-The RPC benchmark supports `echo` (large request + large response) and `consume` (large request + tiny acknowledgement), and reports mean/p50/p95/p99 RTT, requests/s, and application payload MiB/s.
+The RPC benchmark supports `echo` (large request + large response) and `consume` (large request + tiny acknowledgement), and reports mean/stddev/min/p50/p90/p95/p99/p99.9/max latency, requests/s, and application payload MiB/s.
+
+Focused iceoryx2 RTT, including explicit polling-interval control:
+
+```bash
+uv run --extra iceoryx2 examples/benchmarks/iceoryx2_rtt.py --poll-us 100
+```
+
+Large NumPy-array codec and end-to-end throughput:
+
+```bash
+uv run --extra iceoryx2 examples/benchmarks/ndarray_throughput.py \
+  --backend all \
+  --transport ipc \
+  --sizes 1M,4M,16M,64M,256M
+```
+
+`ndarray_throughput.py` also accepts GiB payloads such as `--sizes 256M,1G,2G`; see the benchmark README for memory-safe usage guidance.
 
 The old `pynng_ipc_rtt.py` path remains as a compatibility wrapper.
 

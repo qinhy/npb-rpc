@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 from uuid import uuid4
 
 import numpy as np
@@ -37,6 +37,9 @@ from ._protocol import (
 RequestT = TypeVar("RequestT", bound=BaseModel)
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 Handler = Callable[[BaseModel, RpcContext], BaseModel]
+WaitStrategy = Literal["sleep", "yield", "spin", "hybrid"]
+
+_WAIT_STRATEGIES = frozenset({"sleep", "yield", "spin", "hybrid"})
 
 
 def _load_iceoryx2():
@@ -62,6 +65,63 @@ def _normalize_endpoint(endpoint: str) -> str:
 def _validate_timeout(name: str, value: float | None) -> None:
     if value is not None and (not math.isfinite(value) or value <= 0):
         raise ValueError(f"{name} must be finite and > 0 or None")
+
+
+def _validate_wait_strategy(value: str) -> WaitStrategy:
+    if value not in _WAIT_STRATEGIES:
+        choices = ", ".join(sorted(_WAIT_STRATEGIES))
+        raise ValueError(f"wait_strategy must be one of: {choices}")
+    return value  # type: ignore[return-value]
+
+
+def _validate_spin_duration(value: float) -> None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise TypeError("spin_duration must be numeric")
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("spin_duration must be finite and >= 0")
+
+
+def _idle_wait(
+    *,
+    strategy: WaitStrategy,
+    event: threading.Event,
+    poll_interval: float,
+    spin_duration: float,
+    spin_started: float,
+    deadline: float | None = None,
+) -> float:
+    """Apply one idle step and return the next spin-cycle start time.
+
+    ``sleep`` preserves the original low-CPU behavior. ``yield`` cooperatively
+    yields the current thread with ``time.sleep(0)``. ``spin`` returns
+    immediately for the lowest polling latency and highest CPU usage.
+    ``hybrid`` spins for ``spin_duration`` then yields once before beginning a
+    new spin window.  The latter avoids the millisecond-scale timer wait that
+    dominated the original iceoryx2 RPC latency while still giving peer
+    threads/processes regular scheduling opportunities.
+    """
+    if strategy == "spin":
+        return spin_started
+
+    if strategy == "yield":
+        time.sleep(0)
+        return time.perf_counter()
+
+    if strategy == "hybrid":
+        now = time.perf_counter()
+        if now - spin_started < spin_duration:
+            return spin_started
+        time.sleep(0)
+        return time.perf_counter()
+
+    delay = poll_interval
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return spin_started
+        delay = min(delay, remaining)
+    event.wait(delay)
+    return time.perf_counter()
 
 
 def _open_port(endpoint: str, *, server: bool):
@@ -125,6 +185,8 @@ class Iceoryx2RpcClient:
         *,
         default_timeout: float | None = 10.0,
         poll_interval: float = 0.001,
+        wait_strategy: WaitStrategy = "sleep",
+        spin_duration: float = 50e-6,
         max_envelope_bytes: int = DEFAULT_MAX_ENVELOPE_BYTES,
         max_message_bytes: int = 256 * 1024 * 1024,
         blob_store: BlobStore | None = None,
@@ -137,6 +199,8 @@ class Iceoryx2RpcClient:
         _validate_timeout("poll_interval", poll_interval)
         if poll_interval is None:
             raise ValueError("poll_interval must be > 0")
+        wait_strategy = _validate_wait_strategy(wait_strategy)
+        _validate_spin_duration(spin_duration)
         if externalize_min_bytes is not None and blob_store is None:
             raise ValueError("blob_store is required when externalize_min_bytes is set")
 
@@ -147,6 +211,8 @@ class Iceoryx2RpcClient:
         self.blob_store = blob_store
         self.externalize_min_bytes = externalize_min_bytes
         self.poll_interval = poll_interval
+        self.wait_strategy = wait_strategy
+        self.spin_duration = float(spin_duration)
         self._node, self._service, self._port = _open_port(endpoint, server=False)
         self._lock = threading.Lock()
         self._closed = False
@@ -237,6 +303,7 @@ class Iceoryx2RpcClient:
         if not acquired:
             raise RpcTimeoutError(f"RPC call to {method!r} timed out")
         pending = None
+        spin_started = time.perf_counter()
         try:
             while True:
                 if self._closing.is_set():
@@ -261,10 +328,14 @@ class Iceoryx2RpcClient:
                         finally:
                             response.delete()
                         break
-                delay = self.poll_interval
-                if expires is not None:
-                    delay = min(delay, max(0, expires - time.monotonic()))
-                self._closing.wait(delay)
+                spin_started = _idle_wait(
+                    strategy=self.wait_strategy,
+                    event=self._closing,
+                    poll_interval=self.poll_interval,
+                    spin_duration=self.spin_duration,
+                    spin_started=spin_started,
+                    deadline=expires,
+                )
         except (RpcTimeoutError, RpcTransportError, RpcProtocolError):
             raise
         except Exception as exc:
@@ -315,6 +386,8 @@ class Iceoryx2RpcServer:
         endpoint: str,
         *,
         poll_interval: float = 0.001,
+        wait_strategy: WaitStrategy = "sleep",
+        spin_duration: float = 50e-6,
         max_envelope_bytes: int = DEFAULT_MAX_ENVELOPE_BYTES,
         max_message_bytes: int = 256 * 1024 * 1024,
         blob_store: BlobStore | None = None,
@@ -327,6 +400,8 @@ class Iceoryx2RpcServer:
         _validate_timeout("poll_interval", poll_interval)
         if poll_interval is None:
             raise ValueError("poll_interval must be > 0")
+        wait_strategy = _validate_wait_strategy(wait_strategy)
+        _validate_spin_duration(spin_duration)
         if externalize_min_bytes is not None and blob_store is None:
             raise ValueError("blob_store is required when externalize_min_bytes is set")
 
@@ -337,6 +412,8 @@ class Iceoryx2RpcServer:
         self.externalize_min_bytes = externalize_min_bytes
         self.debug_errors = debug_errors
         self.poll_interval = poll_interval
+        self.wait_strategy = wait_strategy
+        self.spin_duration = float(spin_duration)
         self._node, self._service, self._port = _open_port(endpoint, server=True)
         self._lock = threading.RLock()
         self._methods: dict[str, _Method] = {}
@@ -458,6 +535,7 @@ class Iceoryx2RpcServer:
         with self._lock:
             if self._closed:
                 raise RpcTransportError("RPC server is closed")
+            spin_started = time.perf_counter()
             while not self._stopping.is_set():
                 try:
                     active = self._port.receive()
@@ -471,13 +549,16 @@ class Iceoryx2RpcServer:
                     finally:
                         active.delete()
                     return True
-                delay = self.poll_interval
-                if expires is not None:
-                    remaining = expires - time.monotonic()
-                    if remaining <= 0:
-                        return False
-                    delay = min(delay, remaining)
-                self._stopping.wait(delay)
+                if expires is not None and time.monotonic() >= expires:
+                    return False
+                spin_started = _idle_wait(
+                    strategy=self.wait_strategy,
+                    event=self._stopping,
+                    poll_interval=self.poll_interval,
+                    spin_duration=self.spin_duration,
+                    spin_started=spin_started,
+                    deadline=expires,
+                )
             return False
 
     def _dispatch(self, active: Any) -> None:

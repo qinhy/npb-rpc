@@ -35,10 +35,13 @@ class BenchmarkResult:
     payload_bytes: int
     count: int
     mean_us: float
+    stddev_us: float
+    min_us: float
     p50_us: float
+    p90_us: float
     p95_us: float
     p99_us: float
-    min_us: float
+    p999_us: float
     max_us: float
     requests_per_second: float
     payload_mib_per_second: float
@@ -102,7 +105,7 @@ def make_result(
     mode: str,
     payload_bytes: int,
     latencies_us: Sequence[float],
-    payload_factor: int,
+    payload_factor: int | float,
 ) -> BenchmarkResult:
     if not latencies_us:
         raise ValueError("no benchmark samples were collected")
@@ -121,10 +124,13 @@ def make_result(
         payload_bytes=payload_bytes,
         count=len(latencies_us),
         mean_us=mean_us,
+        stddev_us=statistics.pstdev(latencies_us) if len(latencies_us) > 1 else 0.0,
+        min_us=ordered[0],
         p50_us=percentile(ordered, 0.50),
+        p90_us=percentile(ordered, 0.90),
         p95_us=percentile(ordered, 0.95),
         p99_us=percentile(ordered, 0.99),
-        min_us=ordered[0],
+        p999_us=percentile(ordered, 0.999),
         max_us=ordered[-1],
         requests_per_second=requests_per_second,
         payload_mib_per_second=payload_mib_per_second,
@@ -145,6 +151,8 @@ def iterations_for_size(
         return count
     if target_bytes <= 0:
         raise ValueError("target_bytes must be positive")
+    if min_count <= 0 or max_count <= 0 or min_count > max_count:
+        raise ValueError("iteration bounds must satisfy 0 < min_count <= max_count")
     effective_size = max(size, 1)
     return max(min_count, min(max_count, target_bytes // effective_size))
 
@@ -154,7 +162,7 @@ def warmup_for_count(count: int, requested: int | None) -> int:
         if requested < 0:
             raise ValueError("warmup must be non-negative")
         return requested
-    return min(100, max(5, count // 10))
+    return min(100, max(3, count // 10))
 
 
 def free_tcp_endpoint(host: str = "127.0.0.1") -> str:
@@ -174,20 +182,31 @@ def print_results(results: Iterable[BenchmarkResult]) -> None:
         return
 
     header = (
-        f"{'layer':<10} {'backend':<9} {'trans':<5} {'mode':<7} "
-        f"{'payload':>9} {'n':>7} {'mean us':>10} {'p50':>10} "
-        f"{'p95':>10} {'p99':>10} {'req/s':>11} {'MiB/s':>11}"
+        f"{'layer':<9} {'backend':<9} {'trans':<5} {'mode':<8} "
+        f"{'payload':>9} {'n':>7} {'mean':>9} {'sd':>9} {'min':>9} {'p50':>9} "
+        f"{'p90':>9} {'p95':>9} {'p99':>9} {'p99.9':>9} {'max':>9} "
+        f"{'req/s':>10} {'MiB/s':>10}"
     )
     print(header)
     print("-" * len(header))
     for row in rows:
         print(
-            f"{row.layer:<10} {row.backend:<9} {row.transport:<5} {row.mode:<7} "
+            f"{row.layer:<9} {row.backend:<9} {row.transport:<5} {row.mode:<8} "
             f"{human_size(row.payload_bytes):>9} {row.count:>7,d} "
-            f"{row.mean_us:>10,.1f} {row.p50_us:>10,.1f} "
-            f"{row.p95_us:>10,.1f} {row.p99_us:>10,.1f} "
-            f"{row.requests_per_second:>11,.1f} "
-            f"{row.payload_mib_per_second:>11,.1f}"
+            f"{row.mean_us:>9,.1f} {row.stddev_us:>9,.1f} {row.min_us:>9,.1f} {row.p50_us:>9,.1f} "
+            f"{row.p90_us:>9,.1f} {row.p95_us:>9,.1f} {row.p99_us:>9,.1f} {row.p999_us:>9,.1f} "
+            f"{row.max_us:>9,.1f} {row.requests_per_second:>10,.1f} "
+            f"{row.payload_mib_per_second:>10,.1f}"
+        )
+
+
+def print_tail_note(results: Iterable[BenchmarkResult]) -> None:
+    rows = list(results)
+    sparse = [row for row in rows if row.count < 1000]
+    if sparse:
+        print(
+            "\nNote: p99.9 is descriptive but statistically sparse when n < 1,000; "
+            "use max and repeated runs for large payloads."
         )
 
 
