@@ -245,6 +245,7 @@ zmq = [
 [package.dev-dependencies]
 dev = [
     { name = "fastapi" },
+    { name = "iceoryx2" },
     { name = "pynng" },
     { name = "pytest" },
     { name = "pyzmq" },
@@ -266,6 +267,7 @@ provides-extras = ["iceoryx2", "nng", "zmq"]
 [package.metadata.requires-dev]
 dev = [
     { name = "fastapi", specifier = ">=0.141.1" },
+    { name = "iceoryx2", specifier = ">=0.9.3,<0.10" },
     { name = "pynng", specifier = ">=0.9,<1" },
     { name = "pytest", specifier = ">=8" },
     { name = "pyzmq", specifier = ">=27.0" },

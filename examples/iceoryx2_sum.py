@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import suppress
 
 import numpy as np
 from npb import BinaryModel, binary_schema
@@ -33,10 +34,8 @@ def main() -> None:
                 return SumResponse(total=float(request.values.sum()))
 
             print(f"serving at {server.endpoint}", flush=True)
-            try:
+            with suppress(KeyboardInterrupt):
                 server.serve_forever()
-            except KeyboardInterrupt:
-                pass
     else:
         with Iceoryx2RpcClient.connect(args.endpoint) as client:
             result = client.call(

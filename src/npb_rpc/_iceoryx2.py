@@ -162,12 +162,15 @@ class Iceoryx2RpcClient:
 
     def close(self) -> None:
         self._closing.set()
-        with self._lock:
-            if self._closed:
-                return
-            self._port.delete()
-            self._port = self._service = self._node = None
-            self._closed = True
+        if self._closed:
+            return
+        # Do not wait for the call lock: close() must wake a call waiting for a
+        # server even when that call has no deadline.
+        port = self._port
+        self._port = self._service = self._node = None
+        self._closed = True
+        if port is not None:
+            port.delete()
 
     def __enter__(self) -> Iceoryx2RpcClient:
         return self

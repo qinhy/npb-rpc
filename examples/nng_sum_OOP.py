@@ -7,7 +7,7 @@ from typing import Any, get_type_hints
 
 import numpy as np
 from npb import BinaryModel, binary_schema
-from npb_rpc import NngRpcClient, NngRpcServer, RpcContext, portable_ipc, portable_tcp, RpcSpec, api, methods
+from npb_rpc import NngRpcClient, NngRpcServer, RpcContext, portable_ipc, portable_tcp, RpcSpec, api, api_methods
 from pydantic import field_serializer, field_validator
 
 
@@ -60,7 +60,7 @@ class SumService(SumInterface):
 def build_server(endpoint: str, interface: type, service: Any):
     server = NngRpcServer.bind(endpoint)
 
-    for name, spec, req_t, res_t in methods(interface):
+    for name, spec, req_t, res_t in api_methods(interface):
         fn = getattr(service, name)
 
         def make_handler(fn):
@@ -85,7 +85,7 @@ def build_client(interface: type):
 
     ns["__init__"] = __init__
 
-    for name, spec, req_t, res_t in methods(interface):
+    for name, spec, req_t, res_t in api_methods(interface):
 
         def make_method(spec:RpcSpec, res_t):
             def method(self, request):
@@ -114,7 +114,7 @@ def build_fastapi(endpoint: str, interface: type):
     app = FastAPI()
     client = build_client(interface)(endpoint)
 
-    for name, spec, req_t, res_t in methods(interface):
+    for name, spec, req_t, res_t in api_methods(interface):
         if not spec.http:
             continue
 
