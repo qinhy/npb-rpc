@@ -190,6 +190,7 @@ def run_rpc_case(
     iceoryx2_wait_strategy: str,
     iceoryx2_spin_duration: float,
     call_timeout: float,
+    borrowed_response: bool = False,
 ) -> list[BenchmarkResult]:
     required_message_bytes = max(sizes, default=0) + _MESSAGE_MARGIN
     effective_max_message_bytes = max_message_bytes or required_message_bytes
@@ -289,21 +290,48 @@ def run_rpc_case(
                     else:
                         raise ValueError(mode)
 
+                    if borrowed_response and backend != "iceoryx2":
+                        raise ValueError(
+                            "borrowed_response is only supported by the iceoryx2 backend"
+                        )
+
+                    def invoke_and_verify() -> None:
+                        if borrowed_response:
+                            borrowed = client.call_borrowed(
+                                method, request, response_type, timeout=call_timeout
+                            )
+                            with borrowed as response:
+                                verify(response)
+                            return
+                        verify(
+                            client.call(
+                                method, request, response_type, timeout=call_timeout
+                            )
+                        )
+
                     for _ in range(warmups):
                         health_check()
-                        verify(client.call(method, request, response_type, timeout=call_timeout))
+                        invoke_and_verify()
 
                     latencies_us: list[float] = []
                     for _ in range(iterations):
                         health_check()
                         start = time.perf_counter_ns()
-                        response = client.call(
-                            method, request, response_type, timeout=call_timeout
-                        )
-                        elapsed = time.perf_counter_ns() - start
-                        verify(response)
+                        if borrowed_response:
+                            borrowed = client.call_borrowed(
+                                method, request, response_type, timeout=call_timeout
+                            )
+                            elapsed = time.perf_counter_ns() - start
+                            with borrowed as response:
+                                verify(response)
+                        else:
+                            response = client.call(
+                                method, request, response_type, timeout=call_timeout
+                            )
+                            elapsed = time.perf_counter_ns() - start
+                            verify(response)
+                            del response
                         latencies_us.append(elapsed / 1000.0)
-                        del response
 
                     results.append(
                         make_result(
@@ -389,6 +417,15 @@ def main() -> None:
         help="timeout for each large-array RPC call in seconds (default: 30)",
     )
     parser.add_argument(
+        "--iceoryx2-response-ownership",
+        choices=("owned", "borrowed"),
+        default="owned",
+        help=(
+            "owned makes one final response payload copy; borrowed leaves response "
+            "ndarrays as SHM views (default: owned)"
+        ),
+    )
+    parser.add_argument(
         "--no-codec",
         action="store_true",
         help="skip standalone npb encode/decode measurements",
@@ -462,6 +499,10 @@ def main() -> None:
                     iceoryx2_wait_strategy=args.iceoryx2_wait_strategy,
                     iceoryx2_spin_duration=args.iceoryx2_spin_us / 1_000_000.0,
                     call_timeout=args.call_timeout,
+                    borrowed_response=(
+                        backend == "iceoryx2"
+                        and args.iceoryx2_response_ownership == "borrowed"
+                    ),
                 )
             )
         except (ImportError, ModuleNotFoundError, RuntimeError, ValueError) as exc:
@@ -474,7 +515,8 @@ def main() -> None:
         print(
             f"iceoryx2 wait strategy: {args.iceoryx2_wait_strategy}; "
             f"poll={args.iceoryx2_poll_us:g} us; "
-            f"spin={args.iceoryx2_spin_us:g} us"
+            f"spin={args.iceoryx2_spin_us:g} us; "
+            f"response={args.iceoryx2_response_ownership}"
         )
     print_results(results)
     print_tail_note(results)

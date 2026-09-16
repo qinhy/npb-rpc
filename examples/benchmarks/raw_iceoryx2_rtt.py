@@ -63,7 +63,13 @@ def _open_port(endpoint: str, *, server: bool):
     return node, service, port
 
 
-def _idle(strategy: WaitStrategy, *, poll_interval: float, spin_duration: float, started: float) -> float:
+def _idle(
+    strategy: WaitStrategy,
+    *,
+    poll_interval: float,
+    spin_duration: float,
+    started: float,
+) -> float:
     if strategy == "spin":
         return started
     if strategy == "yield":

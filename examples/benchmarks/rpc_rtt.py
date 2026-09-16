@@ -180,6 +180,7 @@ def _run_mode(
     warmups: int,
     call_timeout: float,
     progress: bool,
+    borrowed_response: bool = False,
     health_check=None,
 ) -> BenchmarkResult:
     payload = np.full(size, 0x5A, dtype=np.uint8)
@@ -205,17 +206,31 @@ def _run_mode(
     else:
         raise ValueError(mode)
 
+    if borrowed_response and backend != "iceoryx2":
+        raise ValueError("borrowed_response is only supported by the iceoryx2 backend")
+
+    ownership = "borrowed" if borrowed_response else "owned"
     if progress:
         print(
             f"[{backend}/{transport}] {mode} {human_size(size)}: "
-            f"warmup={warmups}, measured={iterations}",
+            f"warmup={warmups}, measured={iterations}, response={ownership}",
             flush=True,
         )
+
+    def invoke_and_verify() -> None:
+        if borrowed_response:
+            borrowed = client.call_borrowed(
+                method, request, response_type, timeout=call_timeout
+            )
+            with borrowed as response:
+                verify(response)
+            return
+        verify(client.call(method, request, response_type, timeout=call_timeout))
 
     for index in range(warmups):
         if health_check is not None:
             health_check()
-        verify(client.call(method, request, response_type, timeout=call_timeout))
+        invoke_and_verify()
 
     latencies_us: list[float] = []
     last_progress = time.monotonic()
@@ -223,9 +238,17 @@ def _run_mode(
         if health_check is not None:
             health_check()
         start = time.perf_counter_ns()
-        response = client.call(method, request, response_type, timeout=call_timeout)
-        elapsed = time.perf_counter_ns() - start
-        verify(response)
+        if borrowed_response:
+            borrowed = client.call_borrowed(
+                method, request, response_type, timeout=call_timeout
+            )
+            elapsed = time.perf_counter_ns() - start
+            with borrowed as response:
+                verify(response)
+        else:
+            response = client.call(method, request, response_type, timeout=call_timeout)
+            elapsed = time.perf_counter_ns() - start
+            verify(response)
         latencies_us.append(elapsed / 1000.0)
         now = time.monotonic()
         if progress and now - last_progress >= 2.0:
@@ -268,6 +291,7 @@ def run_case(
     iceoryx2_spin_duration: float = 50e-6,
     call_timeout: float = 5.0,
     progress: bool = True,
+    borrowed_response: bool = False,
 ) -> list[BenchmarkResult]:
     required_message_bytes = max(sizes, default=0) + _MESSAGE_MARGIN
     effective_max_message_bytes = max_message_bytes or required_message_bytes
@@ -312,7 +336,10 @@ def run_case(
             time.sleep(0.05)
 
         if progress:
-            print(f"server ready: backend={backend} endpoint={endpoint} pid={process.pid}", flush=True)
+            print(
+                f"server ready: backend={backend} endpoint={endpoint} pid={process.pid}",
+                flush=True,
+            )
 
         def health_check() -> None:
             if process.exitcode is None:
@@ -358,6 +385,7 @@ def run_case(
                             warmups=warmups,
                             call_timeout=call_timeout,
                             progress=progress,
+                            borrowed_response=borrowed_response,
                             health_check=health_check,
                         )
                     )

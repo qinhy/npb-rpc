@@ -60,6 +60,15 @@ def main() -> None:
         help="timeout for each RPC call in seconds (default: 5)",
     )
     parser.add_argument(
+        "--response-ownership",
+        choices=("owned", "borrowed"),
+        default="owned",
+        help=(
+            "owned makes one final SHM-to-owned payload copy; borrowed keeps "
+            "response ndarrays as zero-copy SHM views (default: owned)"
+        ),
+    )
+    parser.add_argument(
         "--quiet", action="store_true", help="disable live progress output"
     )
     parser.add_argument("--csv", help="optional CSV output path")
@@ -89,10 +98,12 @@ def main() -> None:
         iceoryx2_spin_duration=args.spin_us / 1_000_000.0,
         call_timeout=args.call_timeout,
         progress=not args.quiet,
+        borrowed_response=args.response_ownership == "borrowed",
     )
     print(
         f"iceoryx2 wait strategy: {args.wait_strategy}; "
-        f"poll={args.poll_us:g} us; spin={args.spin_us:g} us"
+        f"poll={args.poll_us:g} us; spin={args.spin_us:g} us; "
+        f"response={args.response_ownership}"
     )
     print_results(results)
     print_tail_note(results)

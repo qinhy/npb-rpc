@@ -307,3 +307,34 @@ uv run --extra iceoryx2 examples/benchmarks/iceoryx2_rtt.py \
 `spin` intentionally consumes a CPU core while waiting and is meant for
 latency measurement. `hybrid` is the better first production experiment.
 The source API keeps `sleep` as its default for backward compatibility.
+
+## iceoryx2 owned vs borrowed responses
+
+The optimized iceoryx2 backend supports two response ownership modes.
+
+`owned` is the normal `client.call()` path. It makes one final copy of the NPB
+response payload before releasing the iceoryx2 sample, so returned ndarray
+fields have normal independent lifetime.
+
+`borrowed` uses `client.call_borrowed()` and decodes directly from the response
+shared-memory sample. It avoids that final copy, but ndarray fields are valid
+only inside the borrowed-response context.
+
+Compare them with:
+
+```bash
+uv run --extra iceoryx2 examples/benchmarks/iceoryx2_rtt.py \
+  --wait-strategy spin --response-ownership owned
+
+uv run --extra iceoryx2 examples/benchmarks/iceoryx2_rtt.py \
+  --wait-strategy spin --response-ownership borrowed
+```
+
+For large arrays:
+
+```bash
+uv run --extra iceoryx2 examples/benchmarks/ndarray_throughput.py \
+  --backend iceoryx2 --mode echo --sizes 1M,4M,16M,64M \
+  --iceoryx2-wait-strategy spin \
+  --iceoryx2-response-ownership borrowed --no-codec
+```
