@@ -11,6 +11,8 @@ from npb_rpc import (
     DiscoveredRpcClient,
     DiscoveredRpcServer,
     FilesystemDiscovery,
+    Iceoryx2RpcClient,
+    Iceoryx2RpcServer,
     NngRpcClient,
     NngRpcServer,
     RpcContext,
@@ -33,6 +35,10 @@ class SumResponse(BinaryModel):
 
 def endpoint_for(backend: str, transport: str, name: str,
         host: str = "127.0.0.1") -> str:
+    if backend == "iceoryx2":
+        if transport != "ipc":
+            raise SystemExit("iceoryx2 requires --transport ipc")
+        return f"iceoryx2://{name}"
     if transport == "tcp":
         return portable_tcp(name, host=host)
     if backend == "zmq" and not zmq.has("ipc"):
@@ -47,7 +53,9 @@ def run_server(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None
     server_name = args.server_name or args.service
     endpoint = args.endpoint or endpoint_for(
         args.backend, args.transport, server_name, args.host)
-    server_type = ZmqRpcServer if args.backend == "zmq" else NngRpcServer
+    server_type = {
+        "zmq": ZmqRpcServer, "nng": NngRpcServer, "iceoryx2": Iceoryx2RpcServer
+    }[args.backend]
     server = DiscoveredRpcServer(
         args.service,
         server_type.bind(endpoint),
@@ -80,7 +88,9 @@ def run_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None
             raise SystemExit(f"server {args.server_name!r} is ambiguous")
 
         instance = matches[0]
-        client_type = ZmqRpcClient if instance.backend == "zmq" else NngRpcClient
+        client_type = {
+            "zmq": ZmqRpcClient, "nng": NngRpcClient, "iceoryx2": Iceoryx2RpcClient
+        }[instance.backend]
         print(
             f"connecting to {instance.instance_id!r} via {instance.backend} "
             f"at {instance.endpoint}"
@@ -115,7 +125,7 @@ if __name__ == "__main__":
     parser.add_argument("role", choices=("server", "client", "list"))
     parser.add_argument("--service", default="sum")
     parser.add_argument("--server-name")
-    parser.add_argument("--backend", choices=("zmq", "nng"), default="zmq")
+    parser.add_argument("--backend", choices=("zmq", "nng", "iceoryx2"), default="zmq")
     parser.add_argument("--transport", choices=("tcp", "ipc"), default="tcp")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--endpoint", help="server bind endpoint override")

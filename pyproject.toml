@@ -34,6 +34,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+iceoryx2 = [
+    "iceoryx2>=0.9.3,<0.10",
+]
 nng = [
     "pynng>=0.9,<1",
 ]

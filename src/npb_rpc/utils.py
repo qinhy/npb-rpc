@@ -12,10 +12,15 @@ from typing import Any, Generic, Literal, TypeVar, get_type_hints
 from ._service import DiscoveredRpcClient
 from ._discovery import FilesystemDiscovery
 from ._zmq import ZmqRpcClient
+from ._iceoryx2 import Iceoryx2RpcClient
 from ._nng import NngRpcClient
 
 
-CLIENT_TYPES = {"nng": NngRpcClient, "zmq": ZmqRpcClient}
+CLIENT_TYPES = {
+    "nng": NngRpcClient,
+    "zmq": ZmqRpcClient,
+    "iceoryx2": Iceoryx2RpcClient,
+}
 RequestT = TypeVar("RequestT", bound=BinaryModel)
 ResponseT = TypeVar("ResponseT", bound=BinaryModel)
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
@@ -176,7 +181,7 @@ def build_client_class(interface: type, name: str | None = None):
 
 
 def add_rpc(server: Any, interface: type, implementation: Any) -> Any:
-    """Register every decorated interface method on an NNG/ZMQ RPC server."""
+    """Register every decorated interface method on an RPC server."""
 
     for method in api_methods(interface):
         fn = getattr(implementation, method.name)

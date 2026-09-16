@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from ._errors import DiscoveryError, ServiceNotFoundError
 
-BackendName = Literal["zmq", "nng"]
+BackendName = Literal["zmq", "nng", "iceoryx2"]
 
 _SERVICE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _INSTANCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -58,8 +58,8 @@ class ServiceRecord:
         _validate_instance_id(self.instance_id)
         if not isinstance(self.endpoint, str) or "://" not in self.endpoint:
             raise ValueError("endpoint must be a transport URL")
-        if self.backend not in {"zmq", "nng"}:
-            raise ValueError("backend must be 'zmq' or 'nng'")
+        if self.backend not in {"zmq", "nng", "iceoryx2"}:
+            raise ValueError("backend must be 'zmq', 'nng', or 'iceoryx2'")
         if not isinstance(self.pid, int) or isinstance(self.pid, bool) or self.pid < 0:
             raise ValueError("pid must be a non-negative integer")
         if not isinstance(self.hostname, str) or not self.hostname:

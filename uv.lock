@@ -179,6 +179,20 @@ wheels = [
 ]
 
 [[package]]
+name = "iceoryx2"
+version = "0.9.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/ec/0dac053c0b7b30dbf03c7dde35aa18f96c44c5108eb99e7ac4411a0cf522/iceoryx2-0.9.3.tar.gz", hash = "sha256:9397a27700f897b7c54596ae11beb75f81c9e3ac8f36753a63ff0d938b194d75", size = 884049, upload-time = "2026-07-08T13:31:27.723Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/7e/c426608a8c7ce3872148fdfa79298b200d5db4e5f0f74c6195f764086f87/iceoryx2-0.9.3-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:052360c1e808326f8d51e859dfa10afb8f92f1d4f2b08761bc65a70d8daa9c40", size = 1260448, upload-time = "2026-07-08T13:31:13.833Z" },
+    { url = "https://files.pythonhosted.org/packages/57/3a/45a5e694ee5196e5186976d8081a66ec647ada22c2685d9dd9a4fb80748e/iceoryx2-0.9.3-cp314-cp314t-manylinux_2_34_x86_64.whl", hash = "sha256:eeaf2fff57d1f37c8a1817be34439b8f41f85851fe059ab09510652197a85392", size = 1522644, upload-time = "2026-07-08T13:31:16.461Z" },
+    { url = "https://files.pythonhosted.org/packages/97/c6/a6d2fea57874fb8f95194c7ad59bc4aaaa8cda33026ef941103ec4b098e4/iceoryx2-0.9.3-cp314-cp314t-win_amd64.whl", hash = "sha256:6452c755886a77a134dc19f1ff34e0bf5ed911c8d8cc1a73b3961258083b6770", size = 1369908, upload-time = "2026-07-08T13:31:18.744Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/c5/f92b03d8d16ca11c56bec29d617a122b1d8b70cd411e258e794b2eac6c99/iceoryx2-0.9.3-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:d8ba2ba50061eeb8c7a2ff7bca39232bf46578b37c4eaedfcd05edc8ecf3c7a2", size = 1275041, upload-time = "2026-07-08T13:31:21.331Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/48/7efea208b1a16c28cba798d8d6d296eb7efaa2690ed3e5de818d6ff69fdf/iceoryx2-0.9.3-cp38-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:146f285b62ea8fe94ec10474e41e36367bb165fadc50c8b9a4abf514875f231d", size = 1526176, upload-time = "2026-07-08T13:31:23.52Z" },
+    { url = "https://files.pythonhosted.org/packages/75/fb/b95a9769713ddb045c1da1183be3a3c0b92dfad80d13424ca929ec98c70f/iceoryx2-0.9.3-cp38-abi3-win_amd64.whl", hash = "sha256:f5e7e827dc802b630e728baba19da2b9c9092cf70b7d152222c921db39d2298a", size = 1374690, upload-time = "2026-07-08T13:31:25.885Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.19"
 source = { registry = "https://pypi.org/simple" }
@@ -218,6 +232,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+iceoryx2 = [
+    { name = "iceoryx2" },
+]
 nng = [
     { name = "pynng" },
 ]
@@ -237,13 +254,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "iceoryx2", marker = "extra == 'iceoryx2'", specifier = ">=0.9.3,<0.10" },
     { name = "npb", git = "https://github.com/qinhy/npb" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pynng", marker = "extra == 'nng'", specifier = ">=0.9,<1" },
     { name = "pyzmq", marker = "extra == 'zmq'", specifier = ">=27.0" },
 ]
-provides-extras = ["nng", "zmq"]
+provides-extras = ["iceoryx2", "nng", "zmq"]
 
 [package.metadata.requires-dev]
 dev = [

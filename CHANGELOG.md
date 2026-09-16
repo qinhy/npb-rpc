@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added optional iceoryx2 shared-memory RPC with typed calls, deadlines,
+  structured errors, message limits, and blob-store support.
+- Integrated iceoryx2 with discovery and generated clients; added examples and
+  cross-process transport tests.
+
 ## 0.1.0
 
 - Added synchronous typed unary RPC over ZeroMQ `DEALER`/`ROUTER` sockets.

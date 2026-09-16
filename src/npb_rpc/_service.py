@@ -15,13 +15,14 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from ._discovery import BackendName, DiscoveryBackend, ServiceRecord, validate_service_name
+from ._iceoryx2 import Iceoryx2RpcClient, Iceoryx2RpcServer
 from ._nng import NngRpcClient, NngRpcServer
 from ._protocol import RpcContext
 from ._zmq import ZmqRpcClient, ZmqRpcServer
 
 RequestT = TypeVar("RequestT", bound=BaseModel)
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
-RpcServer = ZmqRpcServer | NngRpcServer
+RpcServer = ZmqRpcServer | NngRpcServer | Iceoryx2RpcServer
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,9 @@ def _server_backend(server: RpcServer) -> BackendName:
         return "zmq"
     if isinstance(server, NngRpcServer):
         return "nng"
-    raise TypeError("server must be a ZmqRpcServer or NngRpcServer")
+    if isinstance(server, Iceoryx2RpcServer):
+        return "iceoryx2"
+    raise TypeError("server must be a ZmqRpcServer, NngRpcServer, or Iceoryx2RpcServer")
 
 
 class DiscoveredRpcServer:
@@ -49,8 +52,7 @@ class DiscoveredRpcServer:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         validate_service_name(service)
-        if not isinstance(server, (ZmqRpcServer, NngRpcServer)):
-            raise TypeError("server must be a ZmqRpcServer or NngRpcServer")
+        _server_backend(server)
         if not isinstance(discovery, DiscoveryBackend):
             raise TypeError("discovery must implement DiscoveryBackend")
         if heartbeat_interval <= 0:
@@ -187,7 +189,7 @@ class DiscoveredRpcClient:
         if not isinstance(discovery, DiscoveryBackend):
             raise TypeError("discovery must implement DiscoveryBackend")
         options = backend_options or {}
-        unknown = set(options) - {"zmq", "nng"}
+        unknown = set(options) - {"zmq", "nng", "iceoryx2"}
         if unknown:
             raise ValueError(f"unknown backend options: {', '.join(sorted(unknown))}")
         self.discovery = discovery
@@ -209,7 +211,11 @@ class DiscoveredRpcClient:
         validate_service_name(service)
         record = self.discovery.resolve(service)
         options = self.backend_options.get(record.backend, {})
-        client_type = ZmqRpcClient if record.backend == "zmq" else NngRpcClient
+        client_type = {
+            "zmq": ZmqRpcClient,
+            "nng": NngRpcClient,
+            "iceoryx2": Iceoryx2RpcClient,
+        }[record.backend]
         with client_type.connect(record.endpoint, **options) as client:
             return client.call(
                 method,
