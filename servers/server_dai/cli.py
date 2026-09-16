@@ -13,14 +13,10 @@ except ImportError:  # Only needed for ZeroMQ IPC capability detection.
 
 from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
 
-try:
-    from .msg import CameraClient, CameraInterface
-    from .msg import CameraCloseRequest, CameraFrameRequest, CameraFrameSetRequest, CameraOpenRequest, EmptyRequest
-    from .server import run_server
-except ImportError:  # Support running files directly from this directory.
-    from msg import CameraClient, CameraInterface
-    from msg import CameraCloseRequest, CameraFrameRequest, CameraFrameSetRequest, CameraOpenRequest, EmptyRequest
-    from server import run_server
+from servers.msg.dai import CameraClient, CameraInterface
+from servers.msg.dai import CameraCloseRequest, CameraFrameRequest, CameraFrameSetRequest, CameraOpenRequest, EmptyRequest
+from servers.server_dai.server import run_server
+
 
 LOG = logging.getLogger("dai_camera")
 VALID_STREAMS = ("rgb", "left", "right")

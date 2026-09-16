@@ -12,68 +12,39 @@ from typing import Any, Iterator, Mapping
 import uuid
 import numpy as np
 import torch
-if __package__:
-    from .msg import (
-        PcdBackend,
-        PcdBuildRequest,
-        PcdBuildResult,
-        PcdBuildSubmitResponse,
-        PcdJobResultResponse,
-        PcdJobState,
-        PcdJobStatusResponse,
-        PcdSegment,
-        PcdStatusResponse,
-        PcdTiming,
-    )
-    from .disparity_predictors import (
-        DisparityPredictor,
-        FastFoundationStereoDisparity,
-        SGBMDisparityPredictor,
-        SGBMDisparityPredictorCuda,
-        VPIStereoDisparityGPU,
-    )
-    from .matops import MatDevice, MatOps, NumpyMatOps, TorchMatOps
-    from .pcd_calculation import (
-        StereoRgbCalibration,
-        StereoRectifier,
-        project_points_to_rgb_pixels,
-        read_image,
-        rectified_left_to_original_left,
-        rgb8,
-        save_pcd,
-        split_cloud_uv,
-    )
-else:
-    from msg import (
-        PcdBackend,
-        PcdBuildRequest,
-        PcdBuildResult,
-        PcdBuildSubmitResponse,
-        PcdJobResultResponse,
-        PcdJobState,
-        PcdJobStatusResponse,
-        PcdSegment,
-        PcdStatusResponse,
-        PcdTiming,
-    )
-    from disparity_predictors import (
-        DisparityPredictor,
-        FastFoundationStereoDisparity,
-        SGBMDisparityPredictor,
-        SGBMDisparityPredictorCuda,
-        VPIStereoDisparityGPU,
-    )
-    from matops import MatDevice, MatOps, NumpyMatOps, TorchMatOps
-    from pcd_calculation import (
-        StereoRgbCalibration,
-        StereoRectifier,
-        project_points_to_rgb_pixels,
-        read_image,
-        rectified_left_to_original_left,
-        rgb8,
-        save_pcd,
-        split_cloud_uv,
-    )
+
+from servers.msg.pcd import (
+    PcdBackend,
+    PcdBuildRequest,
+    PcdBuildResult,
+    PcdBuildSubmitResponse,
+    PcdJobResultResponse,
+    PcdJobState,
+    PcdJobStatusResponse,
+    PcdSegment,
+    PcdStatusResponse,
+    PcdTiming,
+)
+from servers.server_pcd.disparity_predictors import (
+    DisparityPredictor,
+    FastFoundationStereoDisparity,
+    SGBMDisparityPredictor,
+    SGBMDisparityPredictorCuda,
+    VPIStereoDisparityGPU,
+)
+from servers.server_pcd.matops import MatDevice, MatOps, NumpyMatOps, TorchMatOps
+from servers.server_pcd.pcd_calculation import (
+    StereoRgbCalibration,
+    StereoRectifier,
+    project_points_to_rgb_pixels,
+    read_image,
+    rectified_left_to_original_left,
+    rgb8,
+    save_pcd,
+    split_cloud_uv,
+)
+
+
 LOG = logging.getLogger('npb_rpc_pcd')
 
 # --- Path helpers ---

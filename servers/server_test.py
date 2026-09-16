@@ -6,7 +6,7 @@ import time
 from rich.console import Console
 
 from npb_rpc import FilesystemDiscovery
-from server_dai.msg import (
+from servers.msg.dai import (
     CameraCalibrationResponse,
     CameraFrameSetResponse,
     EmptyRequest,
@@ -15,10 +15,10 @@ from server_dai.msg import (
     CameraFrameSetRequest,
     CameraInterface, CameraClient
 )
-from server_yolo.msg import YoloInferenceRequest, YoloJobRequest, YoloInterface, YoloClient
-from server_pcd.msg import PcdBuildRequest, PcdJobRequest, PcdInterface, PcdClient
+from servers.msg.yolo import YoloInferenceRequest, YoloJobRequest, YoloInterface, YoloClient
+from servers.msg.pcd import PcdBuildRequest, PcdJobRequest, PcdInterface, PcdClient
 
-from store.custom_record_store import CustomStore, PCDRecord
+from servers.store.custom_record_store import CustomStore, PCDRecord
 
 
 console = Console()

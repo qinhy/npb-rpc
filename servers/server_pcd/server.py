@@ -11,14 +11,9 @@ from typing import Any, Mapping
 from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer
 from npb_rpc.utils import add_rpc
 
-if __package__:
-    from .interface import PcdService
-    from .msg import PcdInterface
-    from .worker import PcdWorker
-else:
-    from interface import PcdService
-    from msg import PcdInterface
-    from worker import PcdWorker
+from servers.server_pcd.interface import PcdService
+from servers.msg.pcd import PcdInterface
+from servers.server_pcd.worker import PcdWorker
 
 
 LOG = logging.getLogger("npb_rpc_pcd")

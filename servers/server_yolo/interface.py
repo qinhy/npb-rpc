@@ -7,31 +7,17 @@ from typing import Any
 
 from npb_rpc.utils import add_fastapi_routes
 
-try:
-    from .msg import (
-        YoloInterface,
-        EmptyRequest,
-        YoloInferenceRequest,
-        YoloInferenceSubmitResponse,
-        YoloJobRequest,
-        YoloJobResultResponse,
-        YoloJobStatusResponse,
-        YoloStatusResponse,
-    )
-    from .worker import YoloWorker
-    
-except ImportError:  # Support running files directly from this directory.
-    from msg import (
-        YoloInterface,
-        EmptyRequest,
-        YoloInferenceRequest,
-        YoloInferenceSubmitResponse,
-        YoloJobRequest,
-        YoloJobResultResponse,
-        YoloJobStatusResponse,
-        YoloStatusResponse,
-    )
-    from worker import YoloWorker
+from servers.msg.yolo import (
+    YoloInterface,
+    EmptyRequest,
+    YoloInferenceRequest,
+    YoloInferenceSubmitResponse,
+    YoloJobRequest,
+    YoloJobResultResponse,
+    YoloJobStatusResponse,
+    YoloStatusResponse,
+)
+from servers.server_yolo.worker import YoloWorker
 
 
 LOG = logging.getLogger("yolo.interface")

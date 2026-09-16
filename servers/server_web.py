@@ -3,19 +3,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 
-from discovery_sum import SumRequest, SumResponse
 from npb_rpc import FilesystemDiscovery
-from npb_rpc.utils import RpcTarget
-from server_dai.msg import CameraInterface
-from server_dai.interface import add_camera_routes
-from server_yolo.msg import YoloInterface
-from server_yolo.interface import add_yolo_routes
-from server_pcd.msg import PcdInterface
-from server_pcd.interface import add_pcd_routes
+
+from servers.msg.dai import CameraInterface
+from servers.server_dai.interface import add_camera_routes
+from servers.msg.yolo import YoloInterface
+from servers.server_yolo.interface import add_yolo_routes
+from servers.msg.pcd import PcdInterface
+from servers.server_pcd.interface import add_pcd_routes
 
 app = FastAPI(title="Discovered RPC Web API")
 _registry = os.getenv("RPC_REGISTRY") or os.getenv("CAMERA_REGISTRY")
@@ -53,43 +51,10 @@ def add_pcd_service_routes(service: str, name: str) -> None:
     )
 
 
-def add_sum_routes(service: str, name: str) -> None:
-    """Legacy sum service until discovery_sum exposes the same unified interface."""
-    target = RpcTarget(discovery=DISCOVERY, service=service, server_name=name)
-    base = f"/{service}/{name}"
-
-    def array_sum(body: SumRequest):
-        try:
-            result = target.call_raw(
-                "array.sum",
-                SumRequest(values=np.asarray(body.values, dtype=np.float32)),
-                SumResponse,
-            )
-        except RuntimeError as exc:
-            message = str(exc)
-            if "was not found" in message:
-                raise HTTPException(404, message) from exc
-            if "ambiguous" in message:
-                raise HTTPException(409, message) from exc
-            raise HTTPException(502, f"RPC failed: {exc}") from exc
-        except Exception as exc:
-            raise HTTPException(502, f"RPC failed: {exc}") from exc
-        return {"total": result.total}
-
-    app.add_api_route(
-        f"{base}/sum",
-        array_sum,
-        methods=["POST"],
-        tags=[f"{service}:{name}"],
-        name=f"{DYNAMIC_PREFIX}{service}:{name}:sum",
-    )
-
-
 SERVICE_BUILDERS = {
     CameraInterface.service: add_camera_service_routes,
     YoloInterface.service: add_yolo_service_routes,
     PcdInterface.service: add_pcd_service_routes,
-    # "sum": add_sum_routes,
 }
 
 

@@ -7,30 +7,17 @@ from typing import Any
 
 from npb_rpc.utils import add_fastapi_routes
 
-try:
-    from .msg import (
-        PcdInterface,
-        EmptyRequest,
-        PcdBuildRequest,
-        PcdBuildSubmitResponse,
-        PcdJobRequest,
-        PcdJobResultResponse,
-        PcdJobStatusResponse,
-        PcdStatusResponse,
-    )
-    from .worker import PcdWorker
-except ImportError:  # Support running files directly from this directory.
-    from msg import (
-        PcdInterface,
-        EmptyRequest,
-        PcdBuildRequest,
-        PcdBuildSubmitResponse,
-        PcdJobRequest,
-        PcdJobResultResponse,
-        PcdJobStatusResponse,
-        PcdStatusResponse,
-    )
-    from worker import PcdWorker
+from servers.msg.pcd import (
+    PcdInterface,
+    EmptyRequest,
+    PcdBuildRequest,
+    PcdBuildSubmitResponse,
+    PcdJobRequest,
+    PcdJobResultResponse,
+    PcdJobStatusResponse,
+    PcdStatusResponse,
+)
+from servers.server_pcd.worker import PcdWorker
 
 
 LOG = logging.getLogger("pcd.interface")

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-import custom_record_store as store_module
+import servers.store.custom_record_store as store_module
 
 
 class TimestampTests(unittest.TestCase):

@@ -11,14 +11,10 @@ from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqR
 
 from npb_rpc.utils import add_rpc
 
-try:
-    from .interface import YoloService
-    from .msg import YoloInterface
-    from .worker import YoloWorker
-except ImportError:  # Support running files directly from this directory.
-    from interface import YoloService
-    from msg import YoloInterface
-    from worker import YoloWorker
+from servers.server_yolo.interface import YoloService
+from servers.msg.yolo import YoloInterface
+from servers.server_yolo.worker import YoloWorker
+
 
 LOG = logging.getLogger("nng_dai_yolo")
 STOP = threading.Event()

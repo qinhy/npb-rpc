@@ -15,22 +15,13 @@ try:
 except ImportError:  # Older Ultralytics.
     DEFAULT_CFG_DICT = {}
 
-try:
-    from .msg import (
-        YoloDetection,
-        YoloInferenceRequest,
-        YoloInstancePolygon,
-        YoloPolygon,
-        YoloTile,
-    )
-except ImportError:  # Support running files directly from one directory.
-    from msg import (
-        YoloDetection,
-        YoloInferenceRequest,
-        YoloInstancePolygon,
-        YoloPolygon,
-        YoloTile,
-    )
+from servers.msg.yolo import (
+    YoloDetection,
+    YoloInferenceRequest,
+    YoloInstancePolygon,
+    YoloPolygon,
+    YoloTile,
+)
 
 
 # ============================================================

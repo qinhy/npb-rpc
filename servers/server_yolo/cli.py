@@ -14,14 +14,9 @@ except ImportError:  # Only needed for ZeroMQ IPC capability detection.
 
 from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
 
-try:
-    from .msg import YoloClient, YoloInterface
-    from .msg import EmptyRequest, YoloInferenceRequest, YoloJobRequest, YoloStatusResponse, YoloJobStatusResponse, YoloJobResultResponse
-    from .server import run_server
-except ImportError:  # Support running files directly from one directory.
-    from msg import YoloClient, YoloInterface
-    from msg import EmptyRequest, YoloInferenceRequest, YoloJobRequest, YoloStatusResponse, YoloJobStatusResponse, YoloJobResultResponse
-    from server import run_server
+from servers.msg.yolo import YoloClient, YoloInterface
+from servers.msg.yolo import EmptyRequest, YoloInferenceRequest, YoloJobRequest, YoloStatusResponse, YoloJobStatusResponse, YoloJobResultResponse
+from servers.server_yolo.server import run_server
 
 
 LOG = logging.getLogger("npb_rpc_yolo")

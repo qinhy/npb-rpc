@@ -14,60 +14,32 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-try:
-    from .msg import (
-        YoloDetectResult,
-        YoloInferenceRequest,
-        YoloInferenceSubmitResponse,
-        YoloJobResultResponse,
-        YoloJobState,
-        YoloJobStatusResponse,
-        YoloStatusResponse,
-        YoloTiming,
-    )
-    from .yolo_utils import (
-        Candidate,
-        cluster_tiled_candidates,
-        class_name,
-        crop_mask,
-        effective_roi,
-        group_to_detection,
-        make_divisible,
-        make_tiles,
-        normalize_root,
-        precision_args,
-        read_jpeg,
-        resolve_path,
-        write_json_atomic,
-        yolo_device,
-    )
-except ImportError:  # Support running files directly from one directory.
-    from msg import (
-        YoloDetectResult,
-        YoloInferenceRequest,
-        YoloInferenceSubmitResponse,
-        YoloJobResultResponse,
-        YoloJobState,
-        YoloJobStatusResponse,
-        YoloStatusResponse,
-        YoloTiming,
-    )
-    from yolo_utils import (
-        Candidate,
-        cluster_tiled_candidates,
-        class_name,
-        crop_mask,
-        effective_roi,
-        group_to_detection,
-        make_divisible,
-        make_tiles,
-        normalize_root,
-        precision_args,
-        read_jpeg,
-        resolve_path,
-        write_json_atomic,
-        yolo_device,
-    )
+from servers.msg.yolo import (
+    YoloDetectResult,
+    YoloInferenceRequest,
+    YoloInferenceSubmitResponse,
+    YoloJobResultResponse,
+    YoloJobState,
+    YoloJobStatusResponse,
+    YoloStatusResponse,
+    YoloTiming,
+)
+from servers.server_yolo.yolo_utils import (
+    Candidate,
+    cluster_tiled_candidates,
+    class_name,
+    crop_mask,
+    effective_roi,
+    group_to_detection,
+    make_divisible,
+    make_tiles,
+    normalize_root,
+    precision_args,
+    read_jpeg,
+    resolve_path,
+    write_json_atomic,
+    yolo_device,
+)
 
 
 LOG = logging.getLogger("npb_rpc_yolo")

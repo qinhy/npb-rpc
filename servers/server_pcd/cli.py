@@ -14,28 +14,16 @@ except ImportError:  # Only needed when checking ZeroMQ IPC capability.
 
 from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
 
-if __package__:
-    from .msg import PcdClient, PcdInterface
-    from .msg import (
-        EmptyRequest,
-        PcdBuildRequest,
-        PcdJobRequest,
-        PcdJobResultResponse,
-        PcdJobStatusResponse,
-        PcdStatusResponse,
-    )
-    from .server import run_server
-else:
-    from msg import PcdClient, PcdInterface
-    from msg import (
-        EmptyRequest,
-        PcdBuildRequest,
-        PcdJobRequest,
-        PcdJobResultResponse,
-        PcdJobStatusResponse,
-        PcdStatusResponse,
-    )
-    from server import run_server
+from servers.msg.pcd import PcdClient, PcdInterface
+from servers.msg.pcd import (
+    EmptyRequest,
+    PcdBuildRequest,
+    PcdJobRequest,
+    PcdJobResultResponse,
+    PcdJobStatusResponse,
+    PcdStatusResponse,
+)
+from servers.server_pcd.server import run_server
 
 
 LOG = logging.getLogger("npb_rpc_pcd")

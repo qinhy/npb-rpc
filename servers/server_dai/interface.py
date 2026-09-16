@@ -8,37 +8,20 @@ from typing import Any
 import numpy as np
 from npb_rpc.utils import add_fastapi_routes
 
-try:
-    from .msg import (
-        CameraCalibrationResponse,
-        CameraCloseRequest,
-        CameraControlResponse,
-        CameraFrameRequest,
-        CameraFrameResponse,
-        CameraFrameSetRequest,
-        CameraFrameSetResponse,
-        CameraOpenRequest,
-        CameraStatusResponse,
-        EmptyRequest,
-        CameraInterface,
-    )
-    from .worker import CameraSupervisor, FrameSnapshot
-    
-except ImportError:  # Support running files directly from this directory.
-    from msg import (
-        CameraCalibrationResponse,
-        CameraCloseRequest,
-        CameraControlResponse,
-        CameraFrameRequest,
-        CameraFrameResponse,
-        CameraFrameSetRequest,
-        CameraFrameSetResponse,
-        CameraOpenRequest,
-        CameraStatusResponse,
-        EmptyRequest,
-        CameraInterface,
-    )
-    from worker import CameraSupervisor, FrameSnapshot
+from servers.msg.dai import (
+    CameraCalibrationResponse,
+    CameraCloseRequest,
+    CameraControlResponse,
+    CameraFrameRequest,
+    CameraFrameResponse,
+    CameraFrameSetRequest,
+    CameraFrameSetResponse,
+    CameraOpenRequest,
+    CameraStatusResponse,
+    EmptyRequest,
+    CameraInterface,
+)
+from servers.server_dai.worker import CameraSupervisor, FrameSnapshot
 
 LOG = logging.getLogger("dai_camera.interface")
 STREAMS = ("rgb", "left", "right")

@@ -10,14 +10,10 @@ from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqR
 
 from npb_rpc.utils import add_rpc
 
-try:
-    from .interface import CameraService
-    from .msg import CameraInterface
-    from .worker import CameraSupervisor, DaiStereoCameraStream
-except ImportError:  # Support running files directly from this directory.
-    from interface import CameraService
-    from msg import CameraInterface
-    from worker import CameraSupervisor, DaiStereoCameraStream
+from servers.server_dai.interface import CameraService
+from servers.msg.dai import CameraInterface
+from servers.server_dai.worker import CameraSupervisor, DaiStereoCameraStream
+
 
 LOG = logging.getLogger("nng_dai_camera")
 STOP = threading.Event()
