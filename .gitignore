@@ -7,3 +7,6 @@
 __pycache__/
 *.py[cod]
 
+/fast-foundationstereo
+*.bat
+*.pt
