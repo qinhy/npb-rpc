@@ -46,8 +46,9 @@ class SumResponse(BinaryModel):
     total: float
 
 
-def endpoint_for(backend: str, transport: str, name: str,
-        host: str = "127.0.0.1") -> str:
+def endpoint_for(
+    backend: str, transport: str, name: str, host: str = "127.0.0.1"
+) -> str:
     if backend == "iceoryx2":
         if transport != "ipc":
             raise SystemExit("iceoryx2 requires --transport ipc")
@@ -65,7 +66,8 @@ def endpoint_for(backend: str, transport: str, name: str,
 def run_server(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None:
     server_name = args.server_name or args.service
     endpoint = args.endpoint or endpoint_for(
-        args.backend, args.transport, server_name, args.host)
+        args.backend, args.transport, server_name, args.host
+    )
     server_type = {
         "zmq": ZmqRpcServer, "nng": NngRpcServer, "iceoryx2": Iceoryx2RpcServer
     }[args.backend]
@@ -113,7 +115,8 @@ def run_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None
     else:
         with DiscoveredRpcClient(discovery) as client:
             response = client.call(
-                args.service, "array.sum", request, SumResponse)
+                args.service, "array.sum", request, SumResponse
+            )
 
     print(response.total)
 

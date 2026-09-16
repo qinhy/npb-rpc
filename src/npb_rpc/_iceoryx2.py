@@ -9,11 +9,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 from uuid import uuid4
 
 import numpy as np
-from npb import BlobStore, NPBError, decode, encode
+from npb import BlobStore, NPBError, decode, encode, encoded_size
 from pydantic import BaseModel, ValidationError
 
 from ._errors import (
@@ -23,13 +23,14 @@ from ._errors import (
     RpcTimeoutError,
     RpcTransportError,
 )
-from ._framing import _LENGTH, _pack_message, _unpack_message, _validate_limit
+from ._framing import _LENGTH, _validate_limit
 from ._protocol import (
     DEFAULT_MAX_ENVELOPE_BYTES,
     Envelope,
     RpcContext,
     Status,
     decode_envelope,
+    encode_envelope,
     request_envelope,
     response_envelope,
 )
@@ -37,6 +38,9 @@ from ._protocol import (
 RequestT = TypeVar("RequestT", bound=BaseModel)
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 Handler = Callable[[BaseModel, RpcContext], BaseModel]
+WaitStrategy = Literal["sleep", "yield", "spin", "hybrid"]
+
+_WAIT_STRATEGIES = frozenset({"sleep", "yield", "spin", "hybrid"})
 
 
 def _load_iceoryx2():
@@ -62,6 +66,63 @@ def _normalize_endpoint(endpoint: str) -> str:
 def _validate_timeout(name: str, value: float | None) -> None:
     if value is not None and (not math.isfinite(value) or value <= 0):
         raise ValueError(f"{name} must be finite and > 0 or None")
+
+
+def _validate_wait_strategy(value: str) -> WaitStrategy:
+    if value not in _WAIT_STRATEGIES:
+        choices = ", ".join(sorted(_WAIT_STRATEGIES))
+        raise ValueError(f"wait_strategy must be one of: {choices}")
+    return value  # type: ignore[return-value]
+
+
+def _validate_spin_duration(value: float) -> None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise TypeError("spin_duration must be numeric")
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("spin_duration must be finite and >= 0")
+
+
+def _idle_wait(
+    *,
+    strategy: WaitStrategy,
+    event: threading.Event,
+    poll_interval: float,
+    spin_duration: float,
+    spin_started: float,
+    deadline: float | None = None,
+) -> float:
+    """Apply one idle step and return the next spin-cycle start time.
+
+    ``sleep`` preserves the original low-CPU behavior. ``yield`` cooperatively
+    yields the current thread with ``time.sleep(0)``. ``spin`` returns
+    immediately for the lowest polling latency and highest CPU usage.
+    ``hybrid`` spins for ``spin_duration`` then yields once before beginning a
+    new spin window.  The latter avoids the millisecond-scale timer wait that
+    dominated the original iceoryx2 RPC latency while still giving peer
+    threads/processes regular scheduling opportunities.
+    """
+    if strategy == "spin":
+        return spin_started
+
+    if strategy == "yield":
+        time.sleep(0)
+        return time.perf_counter()
+
+    if strategy == "hybrid":
+        now = time.perf_counter()
+        if now - spin_started < spin_duration:
+            return spin_started
+        time.sleep(0)
+        return time.perf_counter()
+
+    delay = poll_interval
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return spin_started
+        delay = min(delay, remaining)
+    event.wait(delay)
+    return time.perf_counter()
 
 
 def _open_port(endpoint: str, *, server: bool):
@@ -102,18 +163,190 @@ def _open_port(endpoint: str, *, server: bool):
         ) from exc
 
 
-def _send_bytes(port: Any, message: bytes):
-    loan = port.loan_slice_uninit(len(message))
-    ctypes.memmove(loan.payload().as_ptr(), message, len(message))
+class _PayloadTooLarge(ValueError):
+    def __init__(self, nbytes: int, limit: int) -> None:
+        self.nbytes = nbytes
+        self.limit = limit
+        super().__init__(f"payload exceeds the {limit:,}-byte limit: {nbytes:,} bytes")
+
+
+def _slice_as_numpy(payload: Any) -> np.ndarray:
+    """Return a zero-copy 1-D uint8 NumPy view over an iceoryx2 Slice."""
+    length = payload.len()
+    ptr = ctypes.cast(payload.as_ptr(), ctypes.POINTER(ctypes.c_uint8))
+    return np.ctypeslib.as_array(ptr, shape=(length,))
+
+
+def _payload_view(payload: np.ndarray | bytes) -> np.ndarray:
+    if isinstance(payload, np.ndarray):
+        if payload.dtype != np.uint8:
+            raise TypeError("RPC payload ndarray must have dtype uint8")
+        if not payload.flags.c_contiguous:
+            payload = np.ascontiguousarray(payload)
+        return payload.reshape(-1)
+    return np.frombuffer(payload, dtype=np.uint8)
+
+
+def _prepare_loan(
+    port: Any,
+    envelope: Envelope,
+    payload_size: int,
+    *,
+    max_envelope_bytes: int,
+) -> tuple[Any, np.ndarray]:
+    encoded_envelope = encode_envelope(envelope, max_bytes=max_envelope_bytes)
+    payload_offset = _LENGTH.size + len(encoded_envelope)
+    loan = port.loan_slice_uninit(payload_offset + payload_size)
+    shared = _slice_as_numpy(loan.payload())
+    _LENGTH.pack_into(shared, 0, len(encoded_envelope))
+    shared[_LENGTH.size:payload_offset] = np.frombuffer(encoded_envelope, dtype=np.uint8)
+    return loan, shared[payload_offset:]
+
+
+def _send_payload(
+    port: Any,
+    envelope: Envelope,
+    payload: np.ndarray | bytes = b"",
+    *,
+    max_envelope_bytes: int,
+    max_message_bytes: int,
+):
+    view = _payload_view(payload)
+    if view.nbytes > max_message_bytes:
+        raise _PayloadTooLarge(view.nbytes, max_message_bytes)
+    loan, output = _prepare_loan(
+        port,
+        envelope,
+        view.nbytes,
+        max_envelope_bytes=max_envelope_bytes,
+    )
+    if view.nbytes:
+        output[:] = view
     return loan.assume_init().send()
 
 
-def _receive_bytes(sample: Any, *, max_envelope_bytes: int, max_message_bytes: int) -> bytes:
-    payload = sample.payload()
-    # Check the size before copying from shared memory into Python-owned storage.
-    if payload.len() > _LENGTH.size + max_envelope_bytes + max_message_bytes:
-        raise RpcProtocolError("iceoryx2 RPC message exceeds the configured size limit")
-    return ctypes.string_at(payload.as_ptr(), payload.len())
+def _send_model(
+    port: Any,
+    envelope: Envelope,
+    model: BaseModel,
+    *,
+    max_envelope_bytes: int,
+    max_message_bytes: int,
+    blob_store: BlobStore | None,
+    externalize_min_bytes: int | None,
+):
+    # encoded_size() currently sizes inline NPB encoding. When externalization
+    # is requested, encode first and copy the (normally tiny) reference frame
+    # into SHM. The common inline path writes NPB directly into the loan.
+    if externalize_min_bytes is not None:
+        payload = encode(
+            model,
+            blob_store=blob_store,
+            externalize_min_bytes=externalize_min_bytes,
+        )
+        return _send_payload(
+            port,
+            envelope,
+            payload,
+            max_envelope_bytes=max_envelope_bytes,
+            max_message_bytes=max_message_bytes,
+        )
+
+    payload_size = encoded_size(
+        model=model,
+        blob_store=blob_store,
+        externalize_min_bytes=externalize_min_bytes,
+    )
+    if payload_size > max_message_bytes:
+        raise _PayloadTooLarge(payload_size, max_message_bytes)
+
+    loan, output = _prepare_loan(
+        port,
+        envelope,
+        payload_size,
+        max_envelope_bytes=max_envelope_bytes,
+    )
+    encoded = encode(model, out=output, blob_store=blob_store)
+    if encoded.nbytes != payload_size or not np.shares_memory(encoded, output):
+        raise RpcProtocolError("NPB did not encode directly into the iceoryx2 loan")
+    return loan.assume_init().send()
+
+
+def _view_message(
+    sample: Any,
+    *,
+    max_envelope_bytes: int,
+) -> tuple[Envelope, np.ndarray]:
+    """Parse an RPC sample while leaving its NPB body as a zero-copy SHM view."""
+    shared = _slice_as_numpy(sample.payload())
+    if shared.nbytes < _LENGTH.size:
+        raise RpcProtocolError("RPC message is missing its envelope length")
+    (envelope_size,) = _LENGTH.unpack_from(shared, 0)
+    if envelope_size > max_envelope_bytes:
+        raise RpcProtocolError(f"RPC envelope exceeds the {max_envelope_bytes:,}-byte limit")
+    payload_offset = _LENGTH.size + envelope_size
+    if payload_offset > shared.nbytes:
+        raise RpcProtocolError("RPC message contains a truncated envelope")
+    # Control envelopes are intentionally small JSON, so this is a tiny copy.
+    envelope = decode_envelope(
+        shared[_LENGTH.size:payload_offset].tobytes(),
+        max_bytes=max_envelope_bytes,
+    )
+    return envelope, shared[payload_offset:]
+
+
+class Iceoryx2BorrowedResponse(Generic[ResponseT]):
+    """Context-managed RPC result whose ndarray leaves borrow iceoryx2 SHM.
+
+    The value is valid only until :meth:`close` / context-manager exit. While a
+    borrowed response is open, the originating client is intentionally locked
+    so its single-active-request iceoryx2 port cannot be reused prematurely.
+    """
+
+    __slots__ = ("value", "_sample", "_pending", "_lock", "_closed")
+
+    def __init__(
+        self,
+        value: ResponseT,
+        *,
+        sample: Any,
+        pending: Any,
+        lock: threading.Lock,
+    ) -> None:
+        self.value = value
+        self._sample = sample
+        self._pending = pending
+        self._lock = lock
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        try:
+            self._sample.delete()
+        finally:
+            try:
+                self._pending.delete()
+            finally:
+                self._closed = True
+                self._lock.release()
+
+    def __enter__(self) -> ResponseT:
+        if self._closed:
+            raise RuntimeError("borrowed response is closed")
+        return self.value
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
 
 
 class Iceoryx2RpcClient:
@@ -125,6 +358,8 @@ class Iceoryx2RpcClient:
         *,
         default_timeout: float | None = 10.0,
         poll_interval: float = 0.001,
+        wait_strategy: WaitStrategy = "sleep",
+        spin_duration: float = 50e-6,
         max_envelope_bytes: int = DEFAULT_MAX_ENVELOPE_BYTES,
         max_message_bytes: int = 256 * 1024 * 1024,
         blob_store: BlobStore | None = None,
@@ -137,6 +372,8 @@ class Iceoryx2RpcClient:
         _validate_timeout("poll_interval", poll_interval)
         if poll_interval is None:
             raise ValueError("poll_interval must be > 0")
+        wait_strategy = _validate_wait_strategy(wait_strategy)
+        _validate_spin_duration(spin_duration)
         if externalize_min_bytes is not None and blob_store is None:
             raise ValueError("blob_store is required when externalize_min_bytes is set")
 
@@ -147,6 +384,8 @@ class Iceoryx2RpcClient:
         self.blob_store = blob_store
         self.externalize_min_bytes = externalize_min_bytes
         self.poll_interval = poll_interval
+        self.wait_strategy = wait_strategy
+        self.spin_duration = float(spin_duration)
         self._node, self._service, self._port = _open_port(endpoint, server=False)
         self._lock = threading.Lock()
         self._closed = False
@@ -183,27 +422,23 @@ class Iceoryx2RpcClient:
     ) -> None:
         self.close()
 
-    def call(
+    def _start_call(
         self,
         method: str,
         request: RequestT,
-        response_type: type[ResponseT],
         *,
-        timeout: float | None = None,
-        metadata: dict[str, str] | None = None,
-    ) -> ResponseT:
-        """Call one method and decode its typed NPB response."""
+        timeout: float | None,
+        metadata: dict[str, str] | None,
+    ) -> tuple[str, Any, Any]:
         if self._closed:
             raise RpcTransportError("RPC client is closed")
         if not isinstance(method, str) or not method.strip():
             raise ValueError("method must be a non-empty string")
         if not isinstance(request, BaseModel):
             raise TypeError("request must be a Pydantic model instance")
-        if not isinstance(response_type, type) or not issubclass(response_type, BaseModel):
-            raise TypeError("response_type must be a Pydantic model class")
+
         effective_timeout = self.default_timeout if timeout is None else timeout
         _validate_timeout("timeout", effective_timeout)
-
         expires = None if effective_timeout is None else time.monotonic() + effective_timeout
         request_id = uuid4().hex
         deadline_ns = (
@@ -211,24 +446,11 @@ class Iceoryx2RpcClient:
             if effective_timeout is None
             else time.time_ns() + int(effective_timeout * 1_000_000_000)
         )
-        request_payload = encode(
-            request,
-            blob_store=self.blob_store,
-            externalize_min_bytes=self.externalize_min_bytes,
-        )
-        if request_payload.nbytes > self.max_message_bytes:
-            raise RpcProtocolError(
-                f"request payload exceeds the {self.max_message_bytes:,}-byte limit"
-            )
-        message = _pack_message(
-            request_envelope(
-                request_id,
-                method,
-                deadline_unix_ns=deadline_ns,
-                metadata=metadata,
-            ),
-            request_payload,
-            max_envelope_bytes=self.max_envelope_bytes,
+        envelope = request_envelope(
+            request_id,
+            method,
+            deadline_unix_ns=deadline_ns,
+            metadata=metadata,
         )
 
         acquired = self._lock.acquire(
@@ -236,7 +458,9 @@ class Iceoryx2RpcClient:
         )
         if not acquired:
             raise RpcTimeoutError(f"RPC call to {method!r} timed out")
+
         pending = None
+        spin_started = time.perf_counter()
         try:
             while True:
                 if self._closing.is_set():
@@ -244,7 +468,20 @@ class Iceoryx2RpcClient:
                 if expires is not None and time.monotonic() >= expires:
                     raise RpcTimeoutError(f"RPC call to {method!r} timed out")
                 if pending is None:
-                    pending = _send_bytes(self._port, message)
+                    try:
+                        pending = _send_model(
+                            self._port,
+                            envelope,
+                            request,
+                            max_envelope_bytes=self.max_envelope_bytes,
+                            max_message_bytes=self.max_message_bytes,
+                            blob_store=self.blob_store,
+                            externalize_min_bytes=self.externalize_min_bytes,
+                        )
+                    except _PayloadTooLarge as exc:
+                        raise RpcProtocolError(
+                            f"request payload exceeds the {self.max_message_bytes:,}-byte limit"
+                        ) from exc
                     if pending.number_of_server_connections == 0:
                         # Nothing received the request, so waiting and retrying is safe.
                         pending.delete()
@@ -252,33 +489,39 @@ class Iceoryx2RpcClient:
                 if pending is not None:
                     response = pending.receive()
                     if response is not None:
-                        try:
-                            response_message = _receive_bytes(
-                                response,
-                                max_envelope_bytes=self.max_envelope_bytes,
-                                max_message_bytes=self.max_message_bytes,
-                            )
-                        finally:
-                            response.delete()
-                        break
-                delay = self.poll_interval
-                if expires is not None:
-                    delay = min(delay, max(0, expires - time.monotonic()))
-                self._closing.wait(delay)
+                        return request_id, pending, response
+                spin_started = _idle_wait(
+                    strategy=self.wait_strategy,
+                    event=self._closing,
+                    poll_interval=self.poll_interval,
+                    spin_duration=self.spin_duration,
+                    spin_started=spin_started,
+                    deadline=expires,
+                )
         except (RpcTimeoutError, RpcTransportError, RpcProtocolError):
-            raise
-        except Exception as exc:
-            raise RpcTransportError(f"iceoryx2 RPC call failed: {exc}") from exc
-        finally:
             if pending is not None:
                 pending.delete()
             self._lock.release()
+            raise
+        except Exception as exc:
+            if pending is not None:
+                pending.delete()
+            self._lock.release()
+            raise RpcTransportError(f"iceoryx2 RPC call failed: {exc}") from exc
 
-        response_meta, response_payload = _unpack_message(
-            response_message,
+    def _validate_response(
+        self,
+        request_id: str,
+        sample: Any,
+    ) -> np.ndarray:
+        response_meta, response_payload = _view_message(
+            sample,
             max_envelope_bytes=self.max_envelope_bytes,
-            max_message_bytes=self.max_message_bytes,
         )
+        if response_payload.nbytes > self.max_message_bytes:
+            raise RpcProtocolError(
+                f"response payload exceeds the {self.max_message_bytes:,}-byte limit"
+            )
         if response_meta.kind != "response":
             raise RpcProtocolError("received an RPC request on an iceoryx2 client")
         if response_meta.request_id != request_id:
@@ -291,13 +534,104 @@ class Iceoryx2RpcClient:
                 response_meta.error_message or "remote RPC failed",
                 details=response_meta.error_details,
             )
-        if not response_payload:
+        if response_payload.nbytes == 0:
             raise RpcProtocolError("successful RPC response has no NPB payload")
-        binary = np.frombuffer(response_payload, dtype=np.uint8)
+        return response_payload
+
+    def call(
+        self,
+        method: str,
+        request: RequestT,
+        response_type: type[ResponseT],
+        *,
+        timeout: float | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> ResponseT:
+        """Call one method and return an owned response.
+
+        The transport parses directly from iceoryx2 shared memory, then makes
+        exactly one payload copy before releasing the response loan. ndarray
+        leaves in the returned model therefore remain valid independently of
+        the iceoryx2 sample lifetime. Use :meth:`call_borrowed` to avoid this
+        final copy when the caller can keep work inside a context manager.
+        """
+        if not isinstance(response_type, type) or not issubclass(response_type, BaseModel):
+            raise TypeError("response_type must be a Pydantic model class")
+
+        request_id, pending, response = self._start_call(
+            method, request, timeout=timeout, metadata=metadata
+        )
         try:
-            return decode(response_type, binary, blob_store=self.blob_store)
+            borrowed_payload = self._validate_response(request_id, response)
+            # One deliberate large copy: returned ndarray leaves must outlive
+            # the iceoryx2 response sample. The old implementation copied the
+            # whole message plus sliced bytes before decode.
+            owned_payload = borrowed_payload.copy()
+        finally:
+            try:
+                response.delete()
+            finally:
+                try:
+                    pending.delete()
+                finally:
+                    self._lock.release()
+
+        try:
+            return decode(response_type, owned_payload, blob_store=self.blob_store)
         except (NPBError, ValidationError, TypeError, ValueError) as exc:
             raise RpcProtocolError(f"invalid response payload: {exc}") from exc
+
+    def call_borrowed(
+        self,
+        method: str,
+        request: RequestT,
+        response_type: type[ResponseT],
+        *,
+        timeout: float | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> Iceoryx2BorrowedResponse[ResponseT]:
+        """Call one method and borrow the response directly from shared memory.
+
+        Use only as a context manager. ndarray leaves in the returned value are
+        zero-copy views into iceoryx2 SHM and become invalid when the borrowed
+        response is closed. The client remains locked until that point.
+        """
+        if not isinstance(response_type, type) or not issubclass(response_type, BaseModel):
+            raise TypeError("response_type must be a Pydantic model class")
+
+        request_id, pending, response = self._start_call(
+            method, request, timeout=timeout, metadata=metadata
+        )
+        try:
+            borrowed_payload = self._validate_response(request_id, response)
+            value = decode(response_type, borrowed_payload, blob_store=self.blob_store)
+        except (NPBError, ValidationError, TypeError, ValueError) as exc:
+            try:
+                response.delete()
+            finally:
+                try:
+                    pending.delete()
+                finally:
+                    self._lock.release()
+            if isinstance(exc, (RpcProtocolError, RemoteRpcError)):
+                raise
+            raise RpcProtocolError(f"invalid response payload: {exc}") from exc
+        except Exception:
+            try:
+                response.delete()
+            finally:
+                try:
+                    pending.delete()
+                finally:
+                    self._lock.release()
+            raise
+
+        return Iceoryx2BorrowedResponse(
+            value,
+            sample=response,
+            pending=pending,
+            lock=self._lock,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,6 +649,8 @@ class Iceoryx2RpcServer:
         endpoint: str,
         *,
         poll_interval: float = 0.001,
+        wait_strategy: WaitStrategy = "sleep",
+        spin_duration: float = 50e-6,
         max_envelope_bytes: int = DEFAULT_MAX_ENVELOPE_BYTES,
         max_message_bytes: int = 256 * 1024 * 1024,
         blob_store: BlobStore | None = None,
@@ -327,6 +663,8 @@ class Iceoryx2RpcServer:
         _validate_timeout("poll_interval", poll_interval)
         if poll_interval is None:
             raise ValueError("poll_interval must be > 0")
+        wait_strategy = _validate_wait_strategy(wait_strategy)
+        _validate_spin_duration(spin_duration)
         if externalize_min_bytes is not None and blob_store is None:
             raise ValueError("blob_store is required when externalize_min_bytes is set")
 
@@ -337,6 +675,8 @@ class Iceoryx2RpcServer:
         self.externalize_min_bytes = externalize_min_bytes
         self.debug_errors = debug_errors
         self.poll_interval = poll_interval
+        self.wait_strategy = wait_strategy
+        self.spin_duration = float(spin_duration)
         self._node, self._service, self._port = _open_port(endpoint, server=True)
         self._lock = threading.RLock()
         self._methods: dict[str, _Method] = {}
@@ -421,13 +761,40 @@ class Iceoryx2RpcServer:
 
         return decorate
 
-    def _send(self, active: Any, envelope: Envelope, payload: np.ndarray | bytes = b"") -> None:
-        message = _pack_message(envelope, payload, max_envelope_bytes=self.max_envelope_bytes)
+    def _send_empty(self, active: Any, envelope: Envelope) -> None:
         try:
             if active.is_connected:
-                _send_bytes(active, message)
+                _send_payload(
+                    active,
+                    envelope,
+                    max_envelope_bytes=self.max_envelope_bytes,
+                    max_message_bytes=self.max_message_bytes,
+                )
         except Exception as exc:
             # A timed-out caller may disconnect while its handler is still running.
+            if active.is_connected:
+                raise RpcTransportError(f"failed to send iceoryx2 RPC response: {exc}") from exc
+
+    def _send_model_response(
+        self,
+        active: Any,
+        envelope: Envelope,
+        response: BaseModel,
+    ) -> None:
+        try:
+            if active.is_connected:
+                _send_model(
+                    active,
+                    envelope,
+                    response,
+                    max_envelope_bytes=self.max_envelope_bytes,
+                    max_message_bytes=self.max_message_bytes,
+                    blob_store=self.blob_store,
+                    externalize_min_bytes=self.externalize_min_bytes,
+                )
+        except _PayloadTooLarge:
+            raise
+        except Exception as exc:
             if active.is_connected:
                 raise RpcTransportError(f"failed to send iceoryx2 RPC response: {exc}") from exc
 
@@ -440,7 +807,7 @@ class Iceoryx2RpcServer:
         *,
         details: dict[str, Any] | None = None,
     ) -> None:
-        self._send(
+        self._send_empty(
             active,
             response_envelope(
                 request_id,
@@ -458,6 +825,7 @@ class Iceoryx2RpcServer:
         with self._lock:
             if self._closed:
                 raise RpcTransportError("RPC server is closed")
+            spin_started = time.perf_counter()
             while not self._stopping.is_set():
                 try:
                     active = self._port.receive()
@@ -471,32 +839,27 @@ class Iceoryx2RpcServer:
                     finally:
                         active.delete()
                     return True
-                delay = self.poll_interval
-                if expires is not None:
-                    remaining = expires - time.monotonic()
-                    if remaining <= 0:
-                        return False
-                    delay = min(delay, remaining)
-                self._stopping.wait(delay)
+                if expires is not None and time.monotonic() >= expires:
+                    return False
+                spin_started = _idle_wait(
+                    strategy=self.wait_strategy,
+                    event=self._stopping,
+                    poll_interval=self.poll_interval,
+                    spin_duration=self.spin_duration,
+                    spin_started=spin_started,
+                    deadline=expires,
+                )
             return False
 
     def _dispatch(self, active: Any) -> None:
-        payload = active.payload()
-        # Read only the bounded envelope first so oversized requests can receive
-        # a correlated error without copying their body from shared memory.
         try:
-            if payload.len() < _LENGTH.size:
-                return
-            (envelope_size,) = _LENGTH.unpack(ctypes.string_at(payload.as_ptr(), _LENGTH.size))
-            offset = _LENGTH.size + envelope_size
-            if envelope_size > self.max_envelope_bytes or offset > payload.len():
-                return
-            envelope = decode_envelope(
-                ctypes.string_at(payload.as_ptr() + _LENGTH.size, envelope_size),
-                max_bytes=self.max_envelope_bytes,
+            envelope, request_binary = _view_message(
+                active,
+                max_envelope_bytes=self.max_envelope_bytes,
             )
         except RpcProtocolError:
             return
+
         if envelope.kind != "request":
             self._send_error(
                 active,
@@ -525,7 +888,7 @@ class Iceoryx2RpcServer:
             )
             return
 
-        if payload.len() - offset > self.max_message_bytes:
+        if request_binary.nbytes > self.max_message_bytes:
             self._send_error(
                 active,
                 envelope.request_id,
@@ -534,9 +897,9 @@ class Iceoryx2RpcServer:
             )
             return
 
-        raw_payload = ctypes.string_at(payload.as_ptr() + offset, payload.len() - offset)
+        # NPB ndarray leaves are zero-copy views into the active request sample.
+        # They are valid for the duration of this dispatch/handler call only.
         try:
-            request_binary = np.frombuffer(raw_payload, dtype=np.uint8)
             request = decode(
                 method.request_type,
                 request_binary,
@@ -562,19 +925,18 @@ class Iceoryx2RpcServer:
             response = method.handler(request, context)
             if not isinstance(response, method.response_type):
                 response = method.response_type.model_validate(response)
-            response_payload = encode(
+            self._send_model_response(
+                active,
+                response_envelope(envelope.request_id),
                 response,
-                blob_store=self.blob_store,
-                externalize_min_bytes=self.externalize_min_bytes,
             )
-            if response_payload.nbytes > self.max_message_bytes:
-                self._send_error(
-                    active,
-                    envelope.request_id,
-                    Status.RESOURCE_EXHAUSTED,
-                    f"response payload exceeds the {self.max_message_bytes:,}-byte limit",
-                )
-                return
+        except _PayloadTooLarge:
+            self._send_error(
+                active,
+                envelope.request_id,
+                Status.RESOURCE_EXHAUSTED,
+                f"response payload exceeds the {self.max_message_bytes:,}-byte limit",
+            )
         except RpcAbort as exc:
             self._send_error(
                 active,
@@ -583,13 +945,11 @@ class Iceoryx2RpcServer:
                 exc.message,
                 details=exc.details,
             )
-            return
+        except RpcTransportError:
+            raise
         except Exception as exc:
             message = str(exc) if self.debug_errors else "RPC handler failed"
             self._send_error(active, envelope.request_id, Status.INTERNAL, message)
-            return
-
-        self._send(active, response_envelope(envelope.request_id), response_payload)
 
     def serve_forever(self, *, poll_interval_ms: int = 100) -> None:
         if poll_interval_ms <= 0:
