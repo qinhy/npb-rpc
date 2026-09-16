@@ -212,7 +212,7 @@ class PcdJobResultResponse(BinaryModel):
 
 # Server status
 
-@binary_schema("npb-rpc.pcd.status.response", version=1)
+@binary_schema("npb-rpc.pcd.status.response", version=2)
 class PcdStatusResponse(BinaryModel):
     """PCD server, job queue, and disparity-backend cache status."""
 
@@ -230,6 +230,7 @@ class PcdStatusResponse(BinaryModel):
     # Examples: cpu, cuda@cuda:0, dnn@cuda:0, vpi@cuda:0
     cached_backends: tuple[str, ...] = ()
 
+    last_job_id: str = ""
     last_build_ns: int = 0
     last_build_ms: float = 0.0
     error: str = ""

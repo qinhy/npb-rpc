@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Dict, List
@@ -12,7 +13,7 @@ from npb_rpc import FilesystemDiscovery
 
 from servers.msg.dai import CameraInterface
 from servers.server_dai.interface import add_camera_routes
-from servers.msg.yolo import YoloInterface
+from servers.msg.yolo import YoloClient, YoloInferenceRequest, YoloInterface, YoloJobRequest, EmptyRequest
 from servers.server_yolo.interface import add_yolo_routes
 from servers.msg.pcd import PcdInterface
 from servers.server_pcd.interface import add_pcd_routes
@@ -88,7 +89,10 @@ def refresh():
 
 
 def last_ai_record()->List[Dict]:
-    pass
+    yolo:YoloInterface = YoloClient(discovery=FilesystemDiscovery(),server_name="yolo")
+    yolo_st = yolo.status(EmptyRequest())
+    yolo_rec = yolo.job_result(YoloJobRequest(job_id=yolo_st.last_job_id))
+    return [json.loads(yolo_rec.result.model_dump_json())]
 
 
 def debug_get_file(path: str):
@@ -106,6 +110,16 @@ def debug_yolo():
         "yolo_debug.html",
         media_type="text/html",
     )
+
+
+app.add_api_route("/debug/last_ai_record",
+    last_ai_record,methods=["GET"], name="debug", tags=["debug"],)
+
+app.add_api_route("/debug/get_file",
+    debug_get_file, methods=["GET"], name="debug", tags=["debug"])
+
+app.add_api_route("/debug/yolo",
+    debug_yolo,methods=["GET"],tags=["debug"],)
 
 if __name__ == "__main__":
     refresh_routes()

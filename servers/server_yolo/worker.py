@@ -87,6 +87,7 @@ class JobStoreSummary:
     failed_jobs: int
     cancelled_jobs: int
     inference_count: int
+    last_job_id: str
     last_inference_ns: int
     last_inference_ms: float
     error: str
@@ -110,6 +111,7 @@ class YoloJobStore:
         self._succeeded_total = 0
         self._failed_total = 0
         self._cancelled_total = 0
+        self._last_job_id = ""
         self._last_inference_ns = 0
         self._last_inference_ms = 0.0
         self._last_error = ""
@@ -155,6 +157,7 @@ class YoloJobStore:
             record.error = ""
 
             self._succeeded_total += 1
+            self._last_job_id = job_id
             self._last_inference_ns = now_ns
             self._last_inference_ms = result.timing.total_ms
             self._last_error = ""
@@ -221,6 +224,7 @@ class YoloJobStore:
                 failed_jobs=self._failed_total,
                 cancelled_jobs=self._cancelled_total,
                 inference_count=self._succeeded_total,
+                last_job_id=self._last_job_id,
                 last_inference_ns=self._last_inference_ns,
                 last_inference_ms=self._last_inference_ms,
                 error=self._last_error,
@@ -728,7 +732,7 @@ class YoloWorker:
             cache_hits=cache_hits,
             cache_misses=cache_misses,
             cached_models=cached_models,
-            last_job_id=jobs.last_inference_ms,
+            last_job_id=jobs.last_job_id,
             last_inference_ns=jobs.last_inference_ns,
             last_inference_ms=jobs.last_inference_ms,
             error=jobs.error,

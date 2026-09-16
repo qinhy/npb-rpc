@@ -303,7 +303,7 @@ class YoloJobResultResponse(BinaryModel):
 # ============================================================
 
 
-@binary_schema("npb-rpc.yolo.status.response", version=3)
+@binary_schema("npb-rpc.yolo.status.response", version=4)
 class YoloStatusResponse(BinaryModel):
     """YOLO server, job queue, and model-cache status."""
 
@@ -330,6 +330,7 @@ class YoloStatusResponse(BinaryModel):
     cached_models: tuple[str, ...] = ()
 
     # Last completed inference.
+    last_job_id: str = ""
     last_inference_ns: int = 0
     last_inference_ms: float = 0.0
 

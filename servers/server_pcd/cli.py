@@ -74,6 +74,7 @@ def print_status(status: PcdStatusResponse) -> None:
         f"cache_hits={status.cache_hits}",
         f"cache_misses={status.cache_misses}",
         f"cached_backends={list(status.cached_backends)!r}",
+        f"last_job_id={status.last_job_id!r}",
         f"last_ms={status.last_build_ms:.3f}",
         f"error={status.error!r}",
     )

@@ -65,6 +65,7 @@ def print_status(status:YoloStatusResponse) -> None:
         f"cache_hits={status.cache_hits}",
         f"cache_misses={status.cache_misses}",
         f"cached_models={list(status.cached_models)!r}",
+        f"last_job_id={status.last_job_id!r}",
         f"last_ms={status.last_inference_ms:.3f}",
         f"error={status.error!r}",
     )

@@ -135,6 +135,7 @@ class JobStoreSummary:
     failed_jobs: int
     cancelled_jobs: int
     build_count: int
+    last_job_id: str
     last_build_ns: int
     last_build_ms: float
     error: str
@@ -160,6 +161,7 @@ class PcdJobStore:
         self._succeeded_total = 0
         self._failed_total = 0
         self._cancelled_total = 0
+        self._last_job_id = ''
         self._last_build_ns = 0
         self._last_build_ms = 0.0
         self._last_error = ''
@@ -217,6 +219,7 @@ class PcdJobStore:
             record.timing = result.timing
             record.error = ''
             self._succeeded_total += 1
+            self._last_job_id = job_id
             self._last_build_ns = now_ns
             self._last_build_ms = result.timing.total_ms
             self._last_error = ''
@@ -283,6 +286,7 @@ class PcdJobStore:
                 failed_jobs=self._failed_total,
                 cancelled_jobs=self._cancelled_total,
                 build_count=self._succeeded_total,
+                last_job_id=self._last_job_id,
                 last_build_ns=self._last_build_ns,
                 last_build_ms=self._last_build_ms,
                 error=self._last_error,
@@ -968,6 +972,7 @@ class PcdWorker:
             cache_hits=cache_hits,
             cache_misses=cache_misses,
             cached_backends=cached_backends,
+            last_job_id=jobs.last_job_id,
             last_build_ns=jobs.last_build_ns,
             last_build_ms=jobs.last_build_ms,
             error=jobs.error,
