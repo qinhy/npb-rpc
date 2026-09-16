@@ -32,15 +32,14 @@ TERMINAL_STATES = {"succeeded", "failed", "cancelled"}
 
 
 def endpoint_for(backend: str, transport: str, name: str, host: str = "127.0.0.1") -> str:
+    if backend == "iceoryx2":
+        if transport != "ipc":
+            raise SystemExit("iceoryx2 requires --transport ipc")
+        return f"iceoryx2://{name}"
     if transport == "tcp":
         return portable_tcp(name, host=host)
-
-    if backend == "zmq":
-        if zmq is None:
-            raise SystemExit("ZeroMQ backend requested but pyzmq is not installed")
-        if not zmq.has("ipc"):
-            raise SystemExit("This libzmq build does not support ipc://; use TCP or NNG")
-
+    if backend == "zmq" and not zmq.has("ipc"):
+            raise SystemExit("This libzmq build does not support ipc://; use TCP or NNG,IOX2")
     return portable_ipc(name)
 
 
@@ -281,7 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     # RPC / discovery
     add("--service", default=DEFAULT_SERVICE)
     add("--server-name", help="instance id to advertise (server) or select (client)")
-    add("--backend", choices=("nng", "zmq"), default="nng", help="RPC backend")
+    add("--backend", choices=("nng", "zmq", "iceoryx2"), default="iceoryx2", help="RPC backend")
     add("--transport", choices=("tcp", "ipc"), default="ipc")
     add("--host", default="127.0.0.1")
     add("--endpoint", default=None)

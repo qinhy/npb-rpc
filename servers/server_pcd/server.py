@@ -8,7 +8,7 @@ from pathlib import Path
 import threading
 from typing import Any, Mapping
 
-from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer
+from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer, Iceoryx2RpcServer
 from npb_rpc.utils import add_rpc
 
 from servers.server_pcd.interface import PcdService
@@ -22,7 +22,7 @@ STOP = threading.Event()
 
 def make_server(endpoint: str, pcd: PcdWorker, *, backend: str = "nng"):
     """Create one raw NNG/ZMQ RPC server and register the PCD API."""
-    server_type = {"nng": NngRpcServer, "zmq": ZmqRpcServer}.get(backend)
+    server_type = {"nng": NngRpcServer, "zmq": ZmqRpcServer, "iceoryx2": Iceoryx2RpcServer}.get(backend)
     if server_type is None:
         raise ValueError(f"unsupported RPC backend: {backend!r}")
 

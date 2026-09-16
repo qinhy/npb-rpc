@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer
+from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer, Iceoryx2RpcServer
 
 from npb_rpc.utils import add_rpc
 
@@ -20,7 +20,7 @@ STOP = threading.Event()
 
 
 def make_server(endpoint: str, camera: CameraSupervisor, *, backend: str = "nng"):
-    server_type = {"nng": NngRpcServer, "zmq": ZmqRpcServer}.get(backend)
+    server_type = {"nng": NngRpcServer, "zmq": ZmqRpcServer, "iceoryx2": Iceoryx2RpcServer}.get(backend)
     if server_type is None:
         raise ValueError(f"unsupported RPC backend: {backend!r}")
 
