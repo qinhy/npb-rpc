@@ -1,48 +1,21 @@
 from __future__ import annotations
-"""Unified RPC + HTTP interface for the yolo service."""
-
-from dataclasses import dataclass
 from functools import cache
 import inspect
 import io
-import logging
-from typing import Any, Generic, Literal, Protocol, TypeVar, get_type_hints
 import zipfile
 
 import numpy as np
 from npb import BinaryModel
-from npb_rpc import DiscoveredRpcClient, FilesystemDiscovery, NngRpcClient, ZmqRpcClient
+from dataclasses import dataclass
+from typing import Any, Generic, Literal, TypeVar, get_type_hints
 
-try:
-    from .msg import (
-        EmptyRequest,
-        YoloInferenceRequest,
-        YoloInferenceSubmitResponse,
-        YoloJobRequest,
-        YoloJobResultResponse,
-        YoloJobStatusResponse,
-        YoloStatusResponse,
-    )
-    from .worker import YoloWorker
-    
-except ImportError:  # Support running files directly from this directory.
-    from msg import (
-        EmptyRequest,
-        YoloInferenceRequest,
-        YoloInferenceSubmitResponse,
-        YoloJobRequest,
-        YoloJobResultResponse,
-        YoloJobStatusResponse,
-        YoloStatusResponse,
-    )
-    from worker import YoloWorker
+from ._service import DiscoveredRpcClient
+from ._discovery import FilesystemDiscovery
+from ._zmq import ZmqRpcClient
+from ._nng import NngRpcClient
 
 
-LOG = logging.getLogger("yolo.interface")
-STREAMS = ("rgb", "left", "right")
-FRAME_KEYS = (*STREAMS, *(f"{name}.thumbnail" for name in STREAMS))
 CLIENT_TYPES = {"nng": NngRpcClient, "zmq": ZmqRpcClient}
-
 RequestT = TypeVar("RequestT", bound=BinaryModel)
 ResponseT = TypeVar("ResponseT", bound=BinaryModel)
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
@@ -97,100 +70,6 @@ def api(
         return fn
 
     return decorate
-
-
-class YoloInterface(Protocol):
-    """Single source of truth for RPC, generated client, server, and HTTP."""
-
-    service = "yolo"
-
-    @api("yolo.inference", "POST", "inference")
-    def inference(self,request: YoloInferenceRequest)->YoloInferenceSubmitResponse:
-        ...    
-    @api("yolo.job_status", "GET", "job_status")
-    def job_status(self,request: YoloJobRequest)->YoloJobStatusResponse:
-        ...    
-    @api("yolo.job_result", "GET", "job_result")
-    def job_result(self,request: YoloJobRequest)->YoloJobResultResponse:
-        ...    
-    @api("yolo.status", "GET", "status")
-    def status(self,request: EmptyRequest)->YoloStatusResponse:
-        ...    
-
-
-class YoloService(YoloInterface):
-    """Typed RPC/HTTP façade over the long-lived asynchronous YoloWorker."""
-
-    def __init__(
-        self,
-        worker: YoloWorker,
-        logger: logging.Logger | None = None,
-    ) -> None:
-        self.worker = worker
-        self.log = logger or LOG
-
-    def inference(
-        self,
-        request: YoloInferenceRequest,
-    ) -> YoloInferenceSubmitResponse:
-        """Queue inference and return immediately with a job id."""
-        try:
-            return self.worker.submit(request)
-        except Exception as exc:
-            self.log.exception("yolo.inference failed")
-            return YoloInferenceSubmitResponse(
-                accepted=False,
-                input_jpg_path=request.input_jpg_path,
-                output_json_path=request.output_json_path,
-                error=f"inference submit error: {type(exc).__name__}: {exc}",
-            )
-
-    def job_status(
-        self,
-        request: YoloJobRequest,
-    ) -> YoloJobStatusResponse:
-        """Return lightweight state for one asynchronous inference job."""
-        try:
-            return self.worker.job_status(request.job_id)
-        except Exception as exc:
-            self.log.exception("yolo.job_status failed")
-            return YoloJobStatusResponse(
-                found=False,
-                job_id=request.job_id,
-                error=f"job status error: {type(exc).__name__}: {exc}",
-            )
-
-    def job_result(
-        self,
-        request: YoloJobRequest,
-    ) -> YoloJobResultResponse:
-        """Return the full result when a job has succeeded."""
-        try:
-            return self.worker.job_result(request.job_id)
-        except Exception as exc:
-            self.log.exception("yolo.job_result failed")
-            return YoloJobResultResponse(
-                found=False,
-                job_id=request.job_id,
-                error=f"job result error: {type(exc).__name__}: {exc}",
-            )
-
-    def status(
-        self,
-        request: EmptyRequest,
-    ) -> YoloStatusResponse:
-        """Return worker, queue, and model-cache status."""
-        del request
-
-        try:
-            return self.worker.status()
-        except Exception as exc:
-            self.log.exception("yolo.status failed")
-            return YoloStatusResponse(
-                online=False,
-                error=f"status error: {type(exc).__name__}: {exc}",
-            )
-
 
 
 @cache
@@ -295,13 +174,6 @@ def build_client_class(interface: type, name: str | None = None):
     return type(name or f"{interface.__name__}Client", (interface,), namespace)
 
 
-YoloClient = build_client_class(YoloInterface, "YoloClient")
-
-
-# ---------------------------------------------------------------------------
-# Generic RPC registration
-# ---------------------------------------------------------------------------
-
 
 def add_rpc(server: Any, interface: type, implementation: Any) -> Any:
     """Register every decorated interface method on an NNG/ZMQ RPC server."""
@@ -332,7 +204,7 @@ def add_rpc(server: Any, interface: type, implementation: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def add_routes(
+def add_fastapi_routes(
     app: Any,
     interface: type,
     *,
@@ -436,8 +308,3 @@ def add_routes(
         )
 
     return client
-
-
-def add_yolo_routes(app: Any, **kwargs: Any):
-    """Small compatibility/convenience wrapper."""
-    return add_routes(app, YoloInterface, **kwargs)

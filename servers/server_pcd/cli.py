@@ -5,6 +5,8 @@ import logging
 import time
 from pathlib import Path
 
+from npb_rpc.utils import resolve_service_instance
+
 try:
     import zmq
 except ImportError:  # Only needed when checking ZeroMQ IPC capability.
@@ -13,7 +15,7 @@ except ImportError:  # Only needed when checking ZeroMQ IPC capability.
 from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
 
 if __package__:
-    from .interface import PcdClient, PcdInterface, resolve_service_instance
+    from .msg import PcdClient, PcdInterface
     from .msg import (
         EmptyRequest,
         PcdBuildRequest,
@@ -24,7 +26,7 @@ if __package__:
     )
     from .server import run_server
 else:
-    from interface import PcdClient, PcdInterface, resolve_service_instance
+    from msg import PcdClient, PcdInterface
     from msg import (
         EmptyRequest,
         PcdBuildRequest,

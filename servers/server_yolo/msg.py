@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Protocol
 
 from npb import BinaryModel, binary_schema
 from pydantic import BaseModel, Field, model_validator
+
+from npb_rpc.utils import api, build_client_class
 
 
 # ============================================================
@@ -333,6 +335,27 @@ class YoloStatusResponse(BinaryModel):
 
     error: str = ""
 
+
+class YoloInterface(Protocol):
+    """Single source of truth for RPC, generated client, server, and HTTP."""
+
+    service = "yolo"
+
+    @api("yolo.inference", "POST", "inference")
+    def inference(self,request: YoloInferenceRequest)->YoloInferenceSubmitResponse:
+        ...    
+    @api("yolo.job_status", "GET", "job_status")
+    def job_status(self,request: YoloJobRequest)->YoloJobStatusResponse:
+        ...    
+    @api("yolo.job_result", "GET", "job_result")
+    def job_result(self,request: YoloJobRequest)->YoloJobResultResponse:
+        ...    
+    @api("yolo.status", "GET", "status")
+    def status(self,request: EmptyRequest)->YoloStatusResponse:
+        ...    
+
+
+YoloClient = build_client_class(YoloInterface, "YoloClient")
 # Client
 #   │
 #   │ inference(request)

@@ -1,58 +1,69 @@
 #!/usr/bin/env python3
-"""Fault-tolerant DepthAI camera RPC server bootstrap."""
+"""Fault-tolerant yolo RPC server bootstrap."""
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import threading
 
 from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer
 
-try:
-    from .interface import CameraInterface, CameraService, add_rpc
-    from .worker import CameraSupervisor, DaiStereoCameraStream
-except ImportError:  # Support running files directly from this directory.
-    from interface import CameraInterface, CameraService, add_rpc
-    from worker import CameraSupervisor, DaiStereoCameraStream
+from npb_rpc.utils import add_rpc
 
-LOG = logging.getLogger("nng_dai_camera")
+try:
+    from .interface import YoloService
+    from .msg import YoloInterface
+    from .worker import YoloWorker
+except ImportError:  # Support running files directly from this directory.
+    from interface import YoloService
+    from msg import YoloInterface
+    from worker import YoloWorker
+
+LOG = logging.getLogger("nng_dai_yolo")
 STOP = threading.Event()
 
 
-def make_server(endpoint: str, camera: CameraSupervisor, *, backend: str = "nng"):
+def make_server(endpoint: str, yolo: YoloWorker, *, backend: str = "nng"):
     server_type = {"nng": NngRpcServer, "zmq": ZmqRpcServer}.get(backend)
     if server_type is None:
         raise ValueError(f"unsupported RPC backend: {backend!r}")
 
     server = server_type.bind(endpoint)
-    add_rpc(server, CameraInterface, CameraService(camera, LOG))
+    add_rpc(server, YoloInterface, YoloService(yolo, LOG))
     return server
 
 
 def run_server(
     endpoint: str,
-    reconnect_delay: float,
     *,
     backend: str = "nng",
     discovery: FilesystemDiscovery | None = None,
-    service: str = CameraInterface.service,
+    service: str = YoloInterface.service,
     instance_id: str | None = None,
     advertise_endpoint: str | None = None,
-    device: str = "",
-    auto_open: bool = True,
+    worker_count: int = 1,
+    queue_size: int = 0,
+    job_ttl_s: float = 3600,
+    max_completed_jobs: int = 128,
+    read_root: str | Path | None = None,
+    write_root: str | Path | None = None
 ) -> None:
     STOP.clear()
-    camera = CameraSupervisor(
-        DaiStereoCameraStream(device_ip=device),
-        reconnect_delay=reconnect_delay,
-        auto_open=auto_open,
+    yolo = YoloWorker(
+        worker_count=worker_count,
+        queue_size=queue_size,
+        job_ttl_s=job_ttl_s,
+        max_completed_jobs=max_completed_jobs,
+        read_root=read_root,
+        write_root=write_root,
     )
-    camera.start()
+    yolo.start()
 
     try:
         while not STOP.is_set():
             try:
-                raw_server = make_server(endpoint, camera, backend=backend)
+                raw_server = make_server(endpoint, yolo, backend=backend)
                 server = (
                     raw_server
                     if discovery is None
@@ -66,7 +77,7 @@ def run_server(
                 )
 
                 LOG.info(
-                    "%s camera server listening on %s%s",
+                    "%s yolo server listening on %s%s",
                     backend.upper(),
                     endpoint,
                     (
@@ -89,4 +100,4 @@ def run_server(
                 LOG.exception("RPC server failed; restarting")
                 STOP.wait(1.0)
     finally:
-        camera.close()
+        yolo.close()

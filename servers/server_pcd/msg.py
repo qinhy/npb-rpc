@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Protocol
 
 from npb import BinaryModel, binary_schema
 from pydantic import BaseModel, Field, model_validator
+
+from npb_rpc.utils import api, build_client_class
 
 
 # Common
@@ -231,6 +234,26 @@ class PcdStatusResponse(BinaryModel):
     last_build_ms: float = 0.0
     error: str = ""
 
+
+class PcdInterface(Protocol):
+    """Single source of truth for RPC, generated client, server, and FastAPI."""
+
+    service = "pcd"
+
+    @api("pcd.build", "POST", "build")
+    def build(self, request: PcdBuildRequest) -> PcdBuildSubmitResponse: ...
+
+    @api("pcd.job_status", "GET", "job_status")
+    def job_status(self, request: PcdJobRequest) -> PcdJobStatusResponse: ...
+
+    @api("pcd.job_result", "GET", "job_result")
+    def job_result(self, request: PcdJobRequest) -> PcdJobResultResponse: ...
+
+    @api("pcd.status", "GET", "status")
+    def status(self, request: EmptyRequest) -> PcdStatusResponse: ...
+
+
+PcdClient = build_client_class(PcdInterface, "PcdClient")
 
 # Flow:
 # client build() -> queued -> worker running -> cached backend -> calibration/images

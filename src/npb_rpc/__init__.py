@@ -21,7 +21,7 @@ from ._nng import NngRpcClient, NngRpcServer, portable_ipc, portable_tcp
 from ._protocol import PROTOCOL_VERSION, RpcContext, Status
 from ._service import DiscoveredRpcClient, DiscoveredRpcServer
 from ._zmq import ZmqRpcClient, ZmqRpcServer
-from ._utils import RpcSpec, api, methods
+from .utils import RpcSpec, api, api_methods
 
 __all__ = [
     "BackendName",
@@ -50,5 +50,5 @@ __all__ = [
     "validate_service_name",
     "RpcSpec",
     "api",
-    "methods"
+    "api_methods"
 ]

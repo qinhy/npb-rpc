@@ -4,6 +4,8 @@ import argparse
 import logging
 from pathlib import Path
 
+from npb_rpc.utils import resolve_service_instance
+
 try:
     import zmq
 except ImportError:  # Only needed for ZeroMQ IPC capability detection.
@@ -12,11 +14,11 @@ except ImportError:  # Only needed for ZeroMQ IPC capability detection.
 from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
 
 try:
-    from .interface import CameraClient, CameraInterface, resolve_service_instance
+    from .msg import CameraClient, CameraInterface
     from .msg import CameraCloseRequest, CameraFrameRequest, CameraFrameSetRequest, CameraOpenRequest, EmptyRequest
     from .server import run_server
 except ImportError:  # Support running files directly from this directory.
-    from interface import CameraClient, CameraInterface, resolve_service_instance
+    from msg import CameraClient, CameraInterface
     from msg import CameraCloseRequest, CameraFrameRequest, CameraFrameSetRequest, CameraOpenRequest, EmptyRequest
     from server import run_server
 

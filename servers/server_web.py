@@ -9,9 +9,13 @@ from fastapi import FastAPI, HTTPException
 
 from discovery_sum import SumRequest, SumResponse
 from npb_rpc import FilesystemDiscovery
-from server_dai.interface  import CameraInterface, RpcTarget, add_camera_routes
-from server_yolo.interface import YoloInterface, add_yolo_routes
-from server_pcd.interface  import PcdInterface, add_pcd_routes
+from npb_rpc.utils import RpcTarget
+from server_dai.msg import CameraInterface
+from server_dai.interface import add_camera_routes
+from server_yolo.msg import YoloInterface
+from server_yolo.interface import add_yolo_routes
+from server_pcd.msg import PcdInterface
+from server_pcd.interface import add_pcd_routes
 
 app = FastAPI(title="Discovered RPC Web API")
 _registry = os.getenv("RPC_REGISTRY") or os.getenv("CAMERA_REGISTRY")

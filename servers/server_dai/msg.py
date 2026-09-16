@@ -1,8 +1,11 @@
 from __future__ import annotations
+from typing import Protocol
 
 import numpy as np
 from npb import BinaryModel, binary_schema
 from pydantic import field_serializer, field_validator
+
+from npb_rpc.utils import build_client_class, api
 
 
 @binary_schema("npb-rpc.dai.camera.empty", version=1)
@@ -271,4 +274,30 @@ class CameraCalibrationResponse(BinaryModel):
             error=error,
         )
 
-    
+
+class CameraInterface(Protocol):
+    """Single source of truth for RPC, generated client, server, and HTTP."""
+
+    service = "camera"
+
+    @api("camera.open", "GET", "open")
+    def open(self, request: CameraOpenRequest) -> CameraControlResponse: ...
+
+    @api("camera.close", "GET", "close")
+    def close(self, request: CameraCloseRequest) -> CameraControlResponse: ...
+
+    @api("camera.status", "GET", "status")
+    def status(self, request: EmptyRequest) -> CameraStatusResponse: ...
+
+    @api("camera.frame", "GET", "frames", "zip")
+    def frames(self, request: CameraFrameSetRequest) -> CameraFrameSetResponse: ...
+
+    @api("camera.get_frame", "GET", "frame", "jpeg")
+    def get_frame(self, request: CameraFrameRequest) -> CameraFrameResponse: ...
+
+    @api("camera.get_calib", "GET", "get_calib")
+    def get_calib(self, request: EmptyRequest) -> CameraCalibrationResponse: ...
+
+
+CameraClient = build_client_class(CameraInterface, "CameraClient")
+

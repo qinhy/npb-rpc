@@ -9,12 +9,15 @@ import threading
 from typing import Any, Mapping
 
 from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer
+from npb_rpc.utils import add_rpc
 
 if __package__:
-    from .interface import PcdInterface, PcdService, add_rpc
+    from .interface import PcdService
+    from .msg import PcdInterface
     from .worker import PcdWorker
 else:
-    from interface import PcdInterface, PcdService, add_rpc
+    from interface import PcdService
+    from msg import PcdInterface
     from worker import PcdWorker
 
 

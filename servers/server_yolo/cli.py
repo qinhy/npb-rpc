@@ -5,6 +5,8 @@ import logging
 import time
 from pathlib import Path
 
+from npb_rpc.utils import resolve_service_instance
+
 try:
     import zmq
 except ImportError:  # Only needed for ZeroMQ IPC capability detection.
@@ -13,11 +15,11 @@ except ImportError:  # Only needed for ZeroMQ IPC capability detection.
 from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
 
 try:
-    from .interface import YoloClient, YoloInterface, resolve_service_instance
+    from .msg import YoloClient, YoloInterface
     from .msg import EmptyRequest, YoloInferenceRequest, YoloJobRequest, YoloStatusResponse, YoloJobStatusResponse, YoloJobResultResponse
     from .server import run_server
 except ImportError:  # Support running files directly from one directory.
-    from interface import YoloClient, YoloInterface, resolve_service_instance
+    from msg import YoloClient, YoloInterface
     from msg import EmptyRequest, YoloInferenceRequest, YoloJobRequest, YoloStatusResponse, YoloJobStatusResponse, YoloJobResultResponse
     from server import run_server
 
