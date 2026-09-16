@@ -186,7 +186,7 @@ if __name__=="__main__":
     #     output_pcd_path=root+"imgs/rgbd_left/rgb.pcd",
     # )
     # res = method_post("pcd","pcd","build",json.loads(pcd_args.model_dump_json()))
-    store = CustomStore(root_path=Path("../recordings/").absolute())
+    store = CustomStore(root_path=Path("./recordings/").absolute())
     for i in range(10):
         open_hand()
         for i in range(10):
