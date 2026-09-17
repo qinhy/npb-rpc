@@ -21,6 +21,11 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -57,6 +62,8 @@ dev = [
     "ruff>=0.8",
     "ultralytics>=8.4.150",
     "uvicorn>=0.52.4",
+    # Linux / Windows -> CUDA build
+    # macOS -> native Apple Silicon build with MPS
     "torch>=2.12.0",
     "torchvision>=0.27.0",
     "ipython>=9.17.1",
@@ -64,6 +71,7 @@ dev = [
     "imageio>=2.37.4",
     "omegaconf>=2.3.1",
     # torch.compile / Triton
+    # Triton is not installed on macOS.
     "triton>=3.8,<3.9; sys_platform == 'linux'",
     "triton-windows>=3.8,<3.9; sys_platform == 'win32'",
     "rich>=15.0.0",
@@ -71,8 +79,12 @@ dev = [
 ]
 
 [tool.uv.sources]
-torch = { index = "torch-cuda" }
-torchvision = { index = "torch-cuda" }
+torch = [
+    { index = "torch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "torch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
 
 [[tool.uv.index]]
 name = "torch-cuda"
