@@ -14,6 +14,9 @@ import threading
 import time
 from typing import Any, Generic, Literal, TypeVar
 
+import depthai as dai
+from depthai_camera_stream import CameraStream
+
 from servers.msg.dai import CameraCalibrationResponse, CameraStatusResponse
 from servers.server_dai.session_supervisor import (
     RetryPolicy,
@@ -154,9 +157,6 @@ class DaiStereoCameraStream:
     max_exposure_us: int = 16667
 
     def build(self, pipeline: Any) -> dict[str, Any]:
-        import depthai as dai
-        from depthai_camera_stream import CameraStream
-
         common = dict(
             pipeline=pipeline,
             fps=self.fps,
