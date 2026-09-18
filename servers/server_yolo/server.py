@@ -7,7 +7,7 @@ from servers.logger import logging
 from pathlib import Path
 import threading
 
-from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer, Iceoryx2RpcServer
+from npb_rpc import DiscoveredRpcServer, RedisDiscovery, NngRpcServer, ZmqRpcServer, Iceoryx2RpcServer
 
 from npb_rpc.utils import add_rpc
 
@@ -34,7 +34,7 @@ def run_server(
     endpoint: str,
     *,
     backend: str = "nng",
-    discovery: FilesystemDiscovery | None = None,
+    discovery: RedisDiscovery | None = None,
     service: str = YoloInterface.service,
     instance_id: str | None = None,
     advertise_endpoint: str | None = None,

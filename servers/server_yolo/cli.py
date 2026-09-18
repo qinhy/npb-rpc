@@ -12,7 +12,7 @@ try:
 except ImportError:  # Only needed for ZeroMQ IPC capability detection.
     zmq = None
 
-from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
+from npb_rpc import RedisDiscovery, portable_ipc, portable_tcp
 
 from servers.msg.yolo import YoloClient, YoloInterface
 from servers.msg.yolo import EmptyRequest, YoloInferenceRequest, YoloJobRequest, YoloStatusResponse, YoloJobStatusResponse, YoloJobResultResponse
@@ -36,13 +36,13 @@ def endpoint_for(backend: str, transport: str, name: str, host: str = "127.0.0.1
     return portable_ipc(name)
 
 
-def make_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> YoloInterface:
+def make_client(args: argparse.Namespace, discovery: RedisDiscovery) -> YoloInterface:
     if args.endpoint:
         return YoloClient(endpoint=args.endpoint, backend=args.backend, service=args.service)
     return YoloClient(discovery=discovery, service=args.service, server_name=args.server_name)
 
 
-def print_connection(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None:
+def print_connection(args: argparse.Namespace, discovery: RedisDiscovery) -> None:
     if args.endpoint:
         print(f"connecting directly via {args.backend} at {args.endpoint}")
     elif args.server_name:
@@ -178,7 +178,7 @@ def wait_for_job(client: YoloInterface, job_id: str, poll_interval: float, *, fu
         )
 
 
-def run_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None:
+def run_client(args: argparse.Namespace, discovery: RedisDiscovery) -> None:
     client = make_client(args, discovery)
     print_connection(args, discovery)
 
@@ -218,7 +218,7 @@ def run_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None
     print_status(client.status(EmptyRequest()))
 
 
-def show_services(discovery: FilesystemDiscovery) -> None:
+def show_services(discovery: RedisDiscovery) -> None:
     services = discovery.list_services()
     if not services:
         print("no healthy services")
@@ -316,7 +316,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(threadName)s: %(message)s",
     )
 
-    discovery = FilesystemDiscovery(args.registry)
+    discovery = RedisDiscovery(args.registry) if args.registry is not None else RedisDiscovery()
 
     if args.role == "server":
         server_name = args.server_name or args.service

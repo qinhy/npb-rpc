@@ -11,7 +11,7 @@ try:
 except ImportError:  # Only needed for ZeroMQ IPC capability detection.
     zmq = None
 
-from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
+from npb_rpc import RedisDiscovery, portable_ipc, portable_tcp
 
 from servers.msg.dai import CameraClient, CameraInterface
 from servers.msg.dai import CameraCloseRequest, CameraFrameRequest, CameraFrameSetRequest, CameraOpenRequest, EmptyRequest
@@ -35,13 +35,13 @@ def endpoint_for(backend: str, transport: str, name: str, host: str = "127.0.0.1
     return portable_ipc(name)
 
 
-def make_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> CameraInterface:
+def make_client(args: argparse.Namespace, discovery: RedisDiscovery) -> CameraInterface:
     if args.endpoint:
         return CameraClient(endpoint=args.endpoint, backend=args.backend, service=args.service)
     return CameraClient(discovery=discovery, service=args.service, server_name=args.server_name)
 
 
-def run_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None:
+def run_client(args: argparse.Namespace, discovery: RedisDiscovery) -> None:
     client = make_client(args, discovery)
 
     if args.endpoint:
@@ -103,7 +103,7 @@ def run_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None
         print(f"wrote {path}: {jpeg.nbytes} bytes, seq={sequence}, captured_ns={captured_ns}")
 
 
-def show_services(discovery: FilesystemDiscovery) -> None:
+def show_services(discovery: RedisDiscovery) -> None:
     services = discovery.list_services()
     if not services:
         print("no healthy services")
@@ -125,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--endpoint", default=None)
     parser.add_argument("--advertise-endpoint")
-    parser.add_argument("--registry", type=Path)
+    parser.add_argument("--registry", type=Path, default=None)
     parser.add_argument("--reconnect-delay", type=float, default=1.0)
     parser.add_argument("--device", default="")
     parser.add_argument("--no-auto-open", action="store_true")
@@ -148,7 +148,7 @@ def main() -> None:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(threadName)s: %(message)s",
     )
-    discovery = FilesystemDiscovery(args.registry)
+    discovery = RedisDiscovery(args.registry) if args.registry is not None else RedisDiscovery()
 
     if args.role == "server":
         server_name = args.server_name or args.service

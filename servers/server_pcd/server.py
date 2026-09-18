@@ -8,7 +8,7 @@ from pathlib import Path
 import threading
 from typing import Any, Mapping
 
-from npb_rpc import DiscoveredRpcServer, FilesystemDiscovery, NngRpcServer, ZmqRpcServer, Iceoryx2RpcServer
+from npb_rpc import DiscoveredRpcServer, RedisDiscovery, NngRpcServer, ZmqRpcServer, Iceoryx2RpcServer
 from npb_rpc.utils import add_rpc
 
 from servers.server_pcd.interface import PcdService
@@ -36,7 +36,7 @@ def run_server(
     *,
     # RPC
     backend: str = "nng",
-    discovery: FilesystemDiscovery | None = None,
+    discovery: RedisDiscovery | None = None,
     service: str = PcdInterface.service,
     instance_id: str | None = None,
     advertise_endpoint: str | None = None,

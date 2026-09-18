@@ -4,6 +4,7 @@ from ._discovery import (
     BackendName,
     DiscoveryBackend,
     FilesystemDiscovery,
+    RedisDiscovery,
     ServiceRecord,
     validate_service_name,
 )
@@ -28,37 +29,3 @@ from ._protocol import PROTOCOL_VERSION, RpcContext, Status
 from ._service import DiscoveredRpcClient, DiscoveredRpcServer
 from ._zmq import ZmqRpcClient, ZmqRpcServer
 from .utils import RpcSpec, api, api_methods
-
-__all__ = [
-    "BackendName",
-    "PROTOCOL_VERSION",
-    "DiscoveredRpcClient",
-    "DiscoveredRpcServer",
-    "DiscoveryBackend",
-    "DiscoveryError",
-    "FilesystemDiscovery",
-    "Iceoryx2BorrowedResponse",
-    "Iceoryx2RpcClient",
-    "Iceoryx2RpcServer",
-    "WaitStrategy",
-    "NngRpcClient",
-    "NngRpcServer",
-    "RemoteRpcError",
-    "RpcAbort",
-    "RpcContext",
-    "RpcError",
-    "RpcProtocolError",
-    "RpcTimeoutError",
-    "RpcTransportError",
-    "ServiceNotFoundError",
-    "ServiceRecord",
-    "Status",
-    "ZmqRpcClient",
-    "ZmqRpcServer",
-    "portable_ipc",
-    "portable_tcp",
-    "validate_service_name",
-    "RpcSpec",
-    "api",
-    "api_methods"
-]
