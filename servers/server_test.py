@@ -40,6 +40,7 @@ class CameraPipelineConfig:
     yolo_stream: str = "rgb"
     pcd_backend: PcdBackend = "cpu"
     pcd_max_depth_m: float = 2.0
+    detection_bbox_xyxy: list[float] | None = None
 
     calib: CameraCalibrationResponse | None = None
     
@@ -56,21 +57,23 @@ class CameraPipelineConfig:
         self.yolo:YoloInterface = YoloClient(discovery=discovery,server_name="yolo")
         self.pcd:PcdInterface = PcdClient(discovery=discovery,server_name="pcd")
 
-
 RGBD_left = CameraPipelineConfig(
     camera_id="rgbd_left",
     camera_ip="169.254.1.221",
     need_yolo=True,
+    detection_bbox_xyxy=[864,864,3008,3008],
 )
 RGBD_right = CameraPipelineConfig(
     camera_id="rgbd_right",
     camera_ip="169.254.1.222",
     need_yolo=True,
+    detection_bbox_xyxy=[864,864,3008,3008],
 )
 RGBD_hand = CameraPipelineConfig(
     camera_id="rgbd_hand",
     camera_ip="169.254.1.222",
     need_yolo=True,
+    detection_bbox_xyxy=[0,0,3872,3008-864],
     need_pcd=True,
 )
 
@@ -127,44 +130,46 @@ def capture_cams(store:CustomStore,
             yolo_res = cam.yolo.inference(YoloInferenceRequest(
                 input_jpg_path=str(cam_rec.expected_image_path(stream)),
                 output_json_path=str(yolo_rec.expected_data_path()),
+                size_mode="tiling",
+                imgsz=1280, confidence=0.25, iou=0.45,
+                max_detections=100,
+                tile_overlap=416,
+                tile_batch_size=4,
+                detection_bbox_xyxy=cam.detection_bbox_xyxy,
             ))
         
-        if cam.need_pcd:
-            if cam.need_yolo:
-                pcd_rec = PCDRecord(parent=record, source_name=camera_id, kind="folder")
-                # time.sleep(1)
-                with console.status(f"[cyan]YOLO[/] {camera_id}", spinner="dots"):
-                    while yolo_res.state not in ["succeeded","failed","cancelled"]:
-                        yolo_res = cam.yolo.job_status(YoloJobRequest(
-                            job_id=yolo_res.job_id
-                        ))
-                        time.sleep(0.01)
-                rprint("YOLO", f"{camera_id} | {yolo_res.state}",
-                       "green" if yolo_res.state == "succeeded" else "red")
-                
-                pcd_res = cam.pcd.build(PcdBuildRequest(
-                    backend=cam.pcd_backend,
-                    rgb_jpg_path=str(cam_rec.expected_rgb_path()),
-                    left_jpg_path=str(cam_rec.expected_left_path()),
-                    right_jpg_path=str(cam_rec.expected_right_path()),
-                    calibration_json_path=str(calib_path),
-                    output_pcd_path=str(pcd_rec.expected_full_pcd_path()),
-                    max_depth_m=cam.pcd_max_depth_m,
-                    detections_json_path=str(yolo_rec.expected_data_path()),
-                    segments_output_dir=str(pcd_rec.expected_full_pcd_path().parent)
-                ))
-                
-                with console.status(f"[cyan]PCD[/]  {camera_id}", spinner="dots"):
-                    while pcd_res.state not in ["succeeded","failed","cancelled"]:
-                        pcd_res = cam.pcd.job_status(PcdJobRequest(
-                            job_id=pcd_res.job_id
-                        ))
-                        time.sleep(0.01)
-                rprint("PCD", f"{camera_id} | {pcd_res.state}",
-                       "green" if pcd_res.state == "succeeded" else "red")
-            else:
-                pass
-    
+        if cam.need_pcdan and cam.need_yolo:
+            pcd_rec = PCDRecord(parent=record, source_name=camera_id, kind="folder")
+            # time.sleep(1)
+            with console.status(f"[cyan]YOLO[/] {camera_id}", spinner="dots"):
+                while yolo_res.state not in ["succeeded","failed","cancelled"]:
+                    yolo_res = cam.yolo.job_status(YoloJobRequest(
+                        job_id=yolo_res.job_id
+                    ))
+                    time.sleep(0.01)
+            rprint("YOLO", f"{camera_id} | {yolo_res.state}",
+                    "green" if yolo_res.state == "succeeded" else "red")
+            
+            pcd_res = cam.pcd.build(PcdBuildRequest(
+                backend=cam.pcd_backend,
+                rgb_jpg_path=str(cam_rec.expected_rgb_path()),
+                left_jpg_path=str(cam_rec.expected_left_path()),
+                right_jpg_path=str(cam_rec.expected_right_path()),
+                calibration_json_path=str(calib_path),
+                output_pcd_path=str(pcd_rec.expected_full_pcd_path()),
+                max_depth_m=cam.pcd_max_depth_m,
+                detections_json_path=str(yolo_rec.expected_data_path()),
+                segments_output_dir=str(pcd_rec.expected_full_pcd_path().parent)
+            ))
+            
+            with console.status(f"[cyan]PCD[/]  {camera_id}", spinner="dots"):
+                while pcd_res.state not in ["succeeded","failed","cancelled"]:
+                    pcd_res = cam.pcd.job_status(PcdJobRequest(
+                        job_id=pcd_res.job_id
+                    ))
+                    time.sleep(0.01)
+            rprint("PCD", f"{camera_id} | {pcd_res.state}",
+                    "green" if pcd_res.state == "succeeded" else "red")
 
     
 if __name__=="__main__":
