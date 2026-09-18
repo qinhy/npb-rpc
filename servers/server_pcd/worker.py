@@ -750,6 +750,7 @@ class PcdCalculator:
             + timing.segmentation_ms
             + timing.write_ms
         )
+        if request.done_event:request.done_event.set()
         return PcdBuildResult(
             **request.model_dump(),
             backend_used=entry.backend,

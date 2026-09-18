@@ -492,6 +492,7 @@ class UltralyticsYoloDetector:
             postprocess_ms=postprocess_ms,
             total_ms=(time.perf_counter() - t_total) * 1000.0,
         )}")
+        if request.done_event:request.done_event.set()
         return res
 
     def _predict(

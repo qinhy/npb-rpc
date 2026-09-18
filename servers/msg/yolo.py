@@ -5,6 +5,7 @@ from typing import Literal, Protocol
 from npb import BinaryModel, binary_schema
 from pydantic import BaseModel, Field, model_validator
 
+from npb_rpc import RpcEvent
 from npb_rpc.utils import api, build_client_class
 
 
@@ -32,7 +33,7 @@ class EmptyRequest(BinaryModel):
 # ============================================================
 
 
-@binary_schema("npb-rpc.yolo.inference.request", version=2)
+@binary_schema("npb-rpc.yolo.inference.request", version=3)
 class YoloInferenceRequest(BinaryModel):
     """Submit YOLO inference for one server-local JPEG image."""
 
@@ -76,6 +77,10 @@ class YoloInferenceRequest(BinaryModel):
         min_length=4,
         max_length=4,
     )
+
+    # Optional job dependencies / completion signal.
+    wait_for: list[RpcEvent] = Field(default_factory=list) # not support yet
+    done_event: RpcEvent | None = None
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -168,7 +173,7 @@ class YoloTiming(BaseModel):
 # ============================================================
 
 
-@binary_schema("npb-rpc.yolo.detect.result", version=2)
+@binary_schema("npb-rpc.yolo.detect.result", version=3)
 class YoloDetectResult(YoloInferenceRequest):
     """
     Complete YOLO result.
@@ -214,7 +219,7 @@ class YoloDetectResult(YoloInferenceRequest):
 # ============================================================
 
 
-@binary_schema("npb-rpc.yolo.inference.submit.response", version=1)
+@binary_schema("npb-rpc.yolo.inference.submit.response", version=2)
 class YoloInferenceSubmitResponse(BinaryModel):
     """Returned immediately after an inference job is accepted."""
 
@@ -222,6 +227,9 @@ class YoloInferenceSubmitResponse(BinaryModel):
 
     job_id: str = ""
     state: YoloJobState | None = None
+
+    # Echo the completion event supplied by the caller, if any.
+    done_event: RpcEvent | None = None
 
     input_jpg_path: str = ""
     output_json_path: str = ""

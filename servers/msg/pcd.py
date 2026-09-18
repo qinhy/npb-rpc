@@ -6,6 +6,7 @@ from typing import Protocol
 from npb import BinaryModel, binary_schema
 from pydantic import BaseModel, Field, model_validator
 
+from npb_rpc import RpcEvent
 from npb_rpc.utils import api, build_client_class
 
 
@@ -33,7 +34,7 @@ class EmptyRequest(BinaryModel):
 
 # Build request
 
-@binary_schema("npb-rpc.pcd.build.request", version=1)
+@binary_schema("npb-rpc.pcd.build.request", version=2)
 class PcdBuildRequest(BinaryModel):
     """Build one RGB-colored point cloud from an RGB + stereo image set.
 
@@ -73,6 +74,10 @@ class PcdBuildRequest(BinaryModel):
     erode_pixels: int = Field(default=0, ge=0)
     exclusive_segments: bool = False
     save_background: bool = False
+
+    # Optional job dependencies / completion signal.
+    wait_for: list[RpcEvent] = Field(default_factory=list) # not support yet
+    done_event: RpcEvent | None = None
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -123,7 +128,7 @@ class PcdTiming(BaseModel):
     total_ms: float = 0.0
 
 
-@binary_schema("npb-rpc.pcd.build.result", version=1)
+@binary_schema("npb-rpc.pcd.build.result", version=2)
 class PcdBuildResult(PcdBuildRequest):
     """Complete result for one PCD build.
 
@@ -147,13 +152,16 @@ class PcdBuildResult(PcdBuildRequest):
 
 # Async jobs
 
-@binary_schema("npb-rpc.pcd.build.submit.response", version=1)
+@binary_schema("npb-rpc.pcd.build.submit.response", version=2)
 class PcdBuildSubmitResponse(BinaryModel):
     """Returned immediately after a PCD build job is accepted."""
 
     accepted: bool
     job_id: str = ""
     state: PcdJobState | None = None
+
+    # Echo the completion event supplied by the caller, if any.
+    done_event: RpcEvent | None = None
 
     rgb_jpg_path: str = ""
     left_jpg_path: str = ""

@@ -8,6 +8,7 @@ from ._discovery import (
     ServiceRecord,
     validate_service_name,
 )
+from ._event import EventBackend, EventState, RpcEvent, RpcEventResult
 from ._errors import (
     DiscoveryError,
     RemoteRpcError,

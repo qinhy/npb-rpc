@@ -40,15 +40,17 @@ class YoloService(YoloInterface):
     ) -> YoloInferenceSubmitResponse:
         """Queue inference and return immediately with a job id."""
         try:
-            return self.worker.submit(request)
+            res = self.worker.submit(request)
         except Exception as exc:
             self.log.exception("yolo.inference failed")
-            return YoloInferenceSubmitResponse(
+            res = YoloInferenceSubmitResponse(
                 accepted=False,
                 input_jpg_path=request.input_jpg_path,
                 output_json_path=request.output_json_path,
                 error=f"inference submit error: {type(exc).__name__}: {exc}",
             )
+        res.done_event=request.done_event
+        return res
 
     def job_status(
         self,

@@ -36,10 +36,10 @@ class PcdService(PcdInterface):
 
     def build(self, request: PcdBuildRequest) -> PcdBuildSubmitResponse:
         try:
-            return self.worker.submit(request)
+            res = self.worker.submit(request)
         except Exception as exc:
             self.log.exception("pcd.build failed")
-            return PcdBuildSubmitResponse(
+            res = PcdBuildSubmitResponse(
                 accepted=False,
                 rgb_jpg_path=request.rgb_jpg_path,
                 left_jpg_path=request.left_jpg_path,
@@ -48,6 +48,8 @@ class PcdService(PcdInterface):
                 output_json_path=request.output_json_path,
                 error=f"build submit error: {type(exc).__name__}: {exc}",
             )
+        res.done_event=request.done_event
+        return res
 
     def job_status(self, request: PcdJobRequest) -> PcdJobStatusResponse:
         try:
