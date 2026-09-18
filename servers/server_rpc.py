@@ -136,8 +136,6 @@ def capture_cams(store:CustomStore=STORE,
             stream = "rgb"
             yolo_rec = record.add_yolo(camera_id=camera_id,stream=stream,data={})
             yolo_res = cam.yolo.inference(YoloInferenceRequest(
-                input_jpg_path=str(cam_rec.expected_image_path(stream)),
-                output_json_path=str(yolo_rec.expected_data_path()),
                 model_name="yolo11l-seg.pt",
                 size_mode="tiling",
                 imgsz=1280, confidence=0.25, iou=0.45,
@@ -145,6 +143,9 @@ def capture_cams(store:CustomStore=STORE,
                 tile_overlap=416,
                 tile_batch_size=4,
                 detection_bbox_xyxy=cam.detection_bbox_xyxy,
+                
+                input_jpg_path=str(cam_rec.expected_image_path(stream)),
+                output_json_path=str(yolo_rec.expected_data_path()),
                 done_event=RpcEvent.create(),
             ))
         
@@ -153,25 +154,27 @@ def capture_cams(store:CustomStore=STORE,
             
             with console.status(f"[cyan]YOLO[/] {camera_id}", spinner="dots"):
                 yolo_res.done_event.wait()
-
+            yolo_res.done_event.delete()
             yolo_res = cam.yolo.job_status(YoloJobRequest(job_id=yolo_res.job_id))
             rprint("YOLO", f"{camera_id} | {yolo_res.state}",
                     "green" if yolo_res.state == "succeeded" else "red")
 
             pcd_res = cam.pcd.build(PcdBuildRequest(
                 backend=cam.pcd_backend,
+                max_depth_m=cam.pcd_max_depth_m,
+
                 rgb_jpg_path=str(cam_rec.expected_rgb_path()),
                 left_jpg_path=str(cam_rec.expected_left_path()),
                 right_jpg_path=str(cam_rec.expected_right_path()),
                 calibration_json_path=str(calib_path),
                 output_pcd_path=str(pcd_rec.expected_full_pcd_path()),
-                max_depth_m=cam.pcd_max_depth_m,
                 detections_json_path=str(yolo_rec.expected_data_path()),
                 segments_output_dir=str(pcd_rec.expected_full_pcd_path().parent),
                 done_event=RpcEvent.create(),
             ))
             with console.status(f"[cyan]PCD[/]  {camera_id}", spinner="dots"):
                 pcd_res.done_event.wait()
+            pcd_res.done_event.delete()
             pcd_res = cam.pcd.job_status(PcdJobRequest(job_id=pcd_res.job_id))
             rprint("PCD", f"{camera_id} | {pcd_res.state}",
                     "green" if pcd_res.state == "succeeded" else "red")
