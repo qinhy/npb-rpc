@@ -1,6 +1,6 @@
 # DepthAI camera RPC with discovery + runtime device control
 
-The camera service advertises itself through `FilesystemDiscovery`, supports NNG
+The camera service advertises itself through `RedisDiscovery`, supports NNG
 or ZeroMQ, and can now open, close, or switch the DepthAI device while the RPC
 service keeps running.
 
@@ -49,7 +49,7 @@ Omit `--device` to let DepthAI select a device automatically.
 ## Python RPC API
 
 ```python
-from npb_rpc import FilesystemDiscovery
+from npb_rpc import RedisDiscovery
 from your_camera_package import (
     CameraCloseRequest,
     CameraOpenRequest,
@@ -57,7 +57,7 @@ from your_camera_package import (
     client_camera_open,
 )
 
-discovery = FilesystemDiscovery()
+discovery = RedisDiscovery()
 
 opened = client_camera_open(
     CameraOpenRequest(device="169.254.1.222", timeout_s=10.0),

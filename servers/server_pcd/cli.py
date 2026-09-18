@@ -12,7 +12,7 @@ try:
 except ImportError:  # Only needed when checking ZeroMQ IPC capability.
     zmq = None
 
-from npb_rpc import FilesystemDiscovery, portable_ipc, portable_tcp
+from npb_rpc import RedisDiscovery, portable_ipc, portable_tcp
 
 from servers.msg.pcd import PcdClient, PcdInterface
 from servers.msg.pcd import (
@@ -43,13 +43,13 @@ def endpoint_for(backend: str, transport: str, name: str, host: str = "127.0.0.1
     return portable_ipc(name)
 
 
-def make_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> PcdInterface:
+def make_client(args: argparse.Namespace, discovery: RedisDiscovery) -> PcdInterface:
     if args.endpoint:
         return PcdClient(endpoint=args.endpoint, backend=args.backend, service=args.service)
     return PcdClient(discovery=discovery, service=args.service, server_name=args.server_name)
 
 
-def print_connection(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None:
+def print_connection(args: argparse.Namespace, discovery: RedisDiscovery) -> None:
     if args.endpoint:
         print(f"connecting directly via {args.backend} at {args.endpoint}")
     elif args.server_name:
@@ -198,7 +198,7 @@ def wait_for_job(
         print_job_result(client.job_result(PcdJobRequest(job_id=job_id)), full=full_result)
 
 
-def run_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None:
+def run_client(args: argparse.Namespace, discovery: RedisDiscovery) -> None:
     client = make_client(args, discovery)
     print_connection(args, discovery)
 
@@ -236,7 +236,7 @@ def run_client(args: argparse.Namespace, discovery: FilesystemDiscovery) -> None
 
 # Discovery / server configuration
 
-def show_services(discovery: FilesystemDiscovery) -> None:
+def show_services(discovery: RedisDiscovery) -> None:
     services = discovery.list_services()
     if not services:
         print("no healthy services")
@@ -364,7 +364,7 @@ def main() -> None:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(threadName)s: %(message)s",
     )
-    discovery = FilesystemDiscovery(args.registry)
+    discovery = RedisDiscovery(args.registry) if args.registry is not None else RedisDiscovery()
 
     if args.role == "server":
         server_name = args.server_name or args.service

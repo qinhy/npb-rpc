@@ -9,7 +9,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
-from npb_rpc import FilesystemDiscovery
+from npb_rpc import RedisDiscovery
 
 from servers.msg.dai import CameraInterface
 from servers.server_dai.interface import add_camera_routes
@@ -19,8 +19,7 @@ from servers.msg.pcd import PcdInterface
 from servers.server_pcd.interface import add_pcd_routes
 
 app = FastAPI(title="Discovered RPC Web API")
-_registry = os.getenv("RPC_REGISTRY") or os.getenv("CAMERA_REGISTRY")
-DISCOVERY = FilesystemDiscovery(Path(_registry) if _registry else None)
+DISCOVERY = RedisDiscovery()
 DYNAMIC_PREFIX = "dynamic:"
 
 
@@ -89,7 +88,7 @@ def refresh():
 
 
 def last_ai_record()->List[Dict]:
-    yolo:YoloInterface = YoloClient(discovery=FilesystemDiscovery(),server_name="yolo")
+    yolo:YoloInterface = YoloClient(discovery=RedisDiscovery(),server_name="yolo")
     yolo_st = yolo.status(EmptyRequest())
     yolo_rec = yolo.job_result(YoloJobRequest(job_id=yolo_st.last_job_id))
     return [json.loads(yolo_rec.result.model_dump_json())]

@@ -5,7 +5,7 @@ import time
 
 from rich.console import Console
 
-from npb_rpc import FilesystemDiscovery
+from npb_rpc import RedisDiscovery
 from servers.msg.dai import (
     CameraCalibrationResponse,
     CameraFrameSetResponse,
@@ -50,7 +50,7 @@ class CameraPipelineConfig:
     fs: CameraFrameSetResponse | None = None
 
     def __post_init__(self) -> None:
-        discovery=FilesystemDiscovery()
+        discovery=RedisDiscovery()
         self.cli:CameraInterface = CameraClient(
             discovery=discovery,server_name=self.camera_id)
         self.yolo:YoloInterface = YoloClient(discovery=discovery,server_name="yolo")
