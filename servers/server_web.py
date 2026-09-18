@@ -14,6 +14,7 @@ from npb_rpc import RedisDiscovery
 from servers.msg.dai import CameraInterface
 from servers.server_dai.interface import add_camera_routes
 from servers.msg.yolo import YoloClient, YoloInferenceRequest, YoloInterface, YoloJobRequest, EmptyRequest
+from servers.server_rpc import capture_dual_rgb, capture_hand, close_cams, open_dual_rgb, open_hand
 from servers.server_yolo.interface import add_yolo_routes
 from servers.msg.pcd import PcdInterface
 from servers.server_pcd.interface import add_pcd_routes
@@ -119,6 +120,21 @@ app.add_api_route("/debug/get_file",
 
 app.add_api_route("/debug/yolo",
     debug_yolo,methods=["GET"],tags=["debug"],)
+
+app.add_api_route("/close_cams",
+    close_cams,methods=["GET"],tags=["release"],)
+
+app.add_api_route("/open_hand",
+    open_hand,methods=["GET"],tags=["release"],)
+
+app.add_api_route("/open_dual_rgb",
+    open_dual_rgb,methods=["GET"],tags=["release"],)
+
+app.add_api_route("/capture_hand",
+    capture_hand,methods=["GET"],tags=["release"],)
+
+app.add_api_route("/capture_dual_rgb",
+    capture_dual_rgb,methods=["GET"],tags=["release"],)
 
 if __name__ == "__main__":
     refresh_routes()

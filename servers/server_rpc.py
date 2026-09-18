@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import sys
 import time
 
 from rich.console import Console
@@ -22,6 +23,12 @@ from servers.store.custom_record_store import CustomStore, PCDRecord
 from servers.logger import logging
 
 LOG = logging.getLogger(__name__.replace(".",":"))
+
+if sys.platform == "win32":
+    STORE = CustomStore(root_path=Path("./recordings/").absolute())
+elif sys.platform.startswith("linux"):
+    STORE = CustomStore(root_path=Path("/data/recordings/").absolute())    
+    
 console = Console()
 
 
@@ -77,10 +84,11 @@ RGBD_hand = CameraPipelineConfig(
     need_pcd=True,
 )
 
-def close_cams(cams:list[CameraPipelineConfig]=[
-    RGBD_left,RGBD_right,
-    RGBD_hand
-]):
+def close_cams():
+    cams:list[CameraPipelineConfig]=[
+        RGBD_left,RGBD_right,
+        RGBD_hand
+    ]
     results = [cam.cli.close(CameraCloseRequest()) for cam in cams]
     rprint("CLOSE", ", ".join(cam.camera_id for cam in cams), "green")
     return results
@@ -100,7 +108,7 @@ def open_cams(cams:list[CameraPipelineConfig]=[RGBD_left,RGBD_right]):
 def open_dual_rgb():open_cams(cams=[RGBD_left,RGBD_right])
 def open_hand():open_cams(cams=[RGBD_hand])
 
-def capture_cams(store:CustomStore,
+def capture_cams(store:CustomStore=STORE,
         cams:list[CameraPipelineConfig]=[
             RGBD_left,RGBD_right,
             RGBD_hand
@@ -130,6 +138,7 @@ def capture_cams(store:CustomStore,
             yolo_res = cam.yolo.inference(YoloInferenceRequest(
                 input_jpg_path=str(cam_rec.expected_image_path(stream)),
                 output_json_path=str(yolo_rec.expected_data_path()),
+                model_name="yolo11l-seg.pt",
                 size_mode="tiling",
                 imgsz=1280, confidence=0.25, iou=0.45,
                 max_detections=100,
@@ -167,7 +176,9 @@ def capture_cams(store:CustomStore,
             rprint("PCD", f"{camera_id} | {pcd_res.state}",
                     "green" if pcd_res.state == "succeeded" else "red")
 
-    
+def capture_hand():capture_cams(cams=[RGBD_hand])
+def capture_dual_rgb():capture_cams(cams=[RGBD_left,RGBD_right,])
+
 if __name__=="__main__":
     # root="D:/github/resultkit/recording/dual_rgb/2026-09-07/field_all/122825.590133625JST/"
     # yolo_args = YoloInferenceRequest(

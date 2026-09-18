@@ -47,26 +47,33 @@ def _cached_client(backend: EventBackend, url: str, process_id: int) -> Any:
     """
     del process_id
 
+    kwargs = dict(
+        decode_responses=True,
+        socket_timeout=None,          # important for XREAD BLOCK 0
+        socket_connect_timeout=5,     # connecting should still have a limit
+    )
+
     if backend == "valkey":
         try:
             import valkey
         except ImportError:
-            # Valkey speaks RESP and can also be used through redis-py.
             try:
                 import redis
             except ImportError as exc:
                 raise ImportError(
                     "RpcEvent backend='valkey' requires `valkey` or `redis`. "
-                    "Install with `pip install valkey` (preferred) or `pip install redis`."
+                    "Install with `pip install valkey` (preferred) or "
+                    "`pip install redis`."
                 ) from exc
+
             return redis.Redis.from_url(
                 _as_redis_url(url),
-                decode_responses=True,
+                **kwargs,
             )
 
         return valkey.from_url(
             _as_valkey_url(url),
-            decode_responses=True,
+            **kwargs,
         )
 
     try:
@@ -79,7 +86,7 @@ def _cached_client(backend: EventBackend, url: str, process_id: int) -> Any:
 
     return redis.Redis.from_url(
         _as_redis_url(url),
-        decode_responses=True,
+        **kwargs,
     )
 
 
