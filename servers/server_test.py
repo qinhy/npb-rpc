@@ -16,7 +16,7 @@ from servers.msg.dai import (
     CameraInterface, CameraClient
 )
 from servers.msg.yolo import YoloInferenceRequest, YoloJobRequest, YoloInterface, YoloClient
-from servers.msg.pcd import PcdBuildRequest, PcdJobRequest, PcdInterface, PcdClient
+from servers.msg.pcd import PcdBuildRequest, PcdJobRequest, PcdInterface, PcdClient, PcdBackend
 
 from servers.store.custom_record_store import CustomStore, PCDRecord
 from servers.logger import logging
@@ -38,7 +38,7 @@ class CameraPipelineConfig:
     need_pcd: bool = False
 
     yolo_stream: str = "rgb"
-    pcd_backend: str = "cpu"
+    pcd_backend: PcdBackend = "cpu"
     pcd_max_depth_m: float = 2.0
 
     calib: CameraCalibrationResponse | None = None
@@ -143,7 +143,7 @@ def capture_cams(store:CustomStore,
                        "green" if yolo_res.state == "succeeded" else "red")
                 
                 pcd_res = cam.pcd.build(PcdBuildRequest(
-                    backend="cpu",
+                    backend=cam.pcd_backend,
                     rgb_jpg_path=str(cam_rec.expected_rgb_path()),
                     left_jpg_path=str(cam_rec.expected_left_path()),
                     right_jpg_path=str(cam_rec.expected_right_path()),
