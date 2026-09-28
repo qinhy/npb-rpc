@@ -9,15 +9,13 @@ from pydantic import BaseModel, Field, model_validator
 from npb_rpc import RpcEvent
 from npb_rpc.utils import api, build_client_class
 
+from servers.msg.job import JobState, JobResultResponse, JobSubmitResponseBase
+
 
 # Common
 
-class PcdJobState(StrEnum):
-    QUEUED = "queued"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+# Backward-compatible public name; lifecycle is now shared.
+PcdJobState = JobState
 
 
 class PcdBackend(StrEnum):
@@ -153,21 +151,17 @@ class PcdBuildResult(PcdBuildRequest):
 # Async jobs
 
 @binary_schema("npb-rpc.pcd.build.submit.response", version=2)
-class PcdBuildSubmitResponse(BinaryModel):
+class PcdBuildSubmitResponse(JobSubmitResponseBase):
     """Returned immediately after a PCD build job is accepted."""
-
-    accepted: bool
-    job_id: str = ""
-    state: PcdJobState | None = None
-
-    # Echo the completion event supplied by the caller, if any.
-    done_event: RpcEvent | None = None
 
     rgb_jpg_path: str = ""
     left_jpg_path: str = ""
     right_jpg_path: str = ""
     output_pcd_path: str = ""
     output_json_path: str | None = None
+
+    # Keep error after the service-specific echo fields to preserve the
+    # existing fixed wire field ordering.
     error: str = ""
 
 
@@ -208,14 +202,10 @@ class PcdJobStatusResponse(BinaryModel):
 
 
 @binary_schema("npb-rpc.pcd.job.result.response", version=1)
-class PcdJobResultResponse(BinaryModel):
+class PcdJobResultResponse(JobResultResponse[PcdBuildResult]):
     """Full result of one asynchronous PCD build job."""
 
-    found: bool
-    job_id: str
-    state: PcdJobState | None = None
-    result: PcdBuildResult | None = None  # Populated only when succeeded.
-    error: str = ""
+    pass
 
 
 # Server status

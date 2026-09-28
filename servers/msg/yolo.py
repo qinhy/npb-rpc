@@ -8,19 +8,16 @@ from pydantic import BaseModel, Field, model_validator
 from npb_rpc import RpcEvent
 from npb_rpc.utils import api, build_client_class
 
+from servers.msg.job import JobState, JobResultResponse, JobSubmitResponseBase
+
 
 # ============================================================
 # Common
 # ============================================================
 
 
-YoloJobState = Literal[
-    "queued",
-    "running",
-    "succeeded",
-    "failed",
-    "cancelled",
-]
+# Backward-compatible public name; lifecycle is now shared.
+YoloJobState = JobState
 
 
 @binary_schema("npb-rpc.yolo.empty", version=1)
@@ -220,20 +217,14 @@ class YoloDetectResult(YoloInferenceRequest):
 
 
 @binary_schema("npb-rpc.yolo.inference.submit.response", version=2)
-class YoloInferenceSubmitResponse(BinaryModel):
+class YoloInferenceSubmitResponse(JobSubmitResponseBase):
     """Returned immediately after an inference job is accepted."""
-
-    accepted: bool
-
-    job_id: str = ""
-    state: YoloJobState | None = None
-
-    # Echo the completion event supplied by the caller, if any.
-    done_event: RpcEvent | None = None
 
     input_jpg_path: str = ""
     output_json_path: str = ""
 
+    # Keep error after the service-specific echo fields to preserve the
+    # existing fixed wire field ordering.
     error: str = ""
 
 
@@ -292,18 +283,10 @@ class YoloJobStatusResponse(BinaryModel):
 
 
 @binary_schema("npb-rpc.yolo.job.result.response", version=1)
-class YoloJobResultResponse(BinaryModel):
+class YoloJobResultResponse(JobResultResponse[YoloDetectResult]):
     """Full result of one asynchronous inference job."""
 
-    found: bool
-    job_id: str
-
-    state: YoloJobState | None = None
-
-    # Populated only when state == "succeeded".
-    result: YoloDetectResult | None = None
-
-    error: str = ""
+    pass
 
 
 # ============================================================
