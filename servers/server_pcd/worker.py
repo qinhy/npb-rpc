@@ -1039,11 +1039,11 @@ class PcdWorker:
                     job_id=job_id,
                     backend_ms=backend_ms,
                 )
+                self.store.succeed(job_id, result)
             # Includes decode, backend acquisition, calculation, and PCD writes.
             result.timing.total_ms = (time.perf_counter() - job_started) * 1000.0
             if output_json_path is not None:
                 write_json_atomic(output_json_path, result, job_id)
-            self.store.succeed(job_id, result)
             LOG.info(
                 'PCD job %s succeeded: %d points, %d segments, %.1f ms',
                 job_id,

@@ -80,33 +80,47 @@ RGBD_hand = CameraPipelineConfig(
     camera_id="rgbd_hand",
     camera_ip="169.254.1.222",
     need_yolo=True,
-    detection_bbox_xyxy=[0,0,3872,3008-864],
+    detection_bbox_xyxy=None,#[0,0,3872,3008-864],
     need_pcd=True,
 )
 
-def close_cams():
-    cams:list[CameraPipelineConfig]=[
-        RGBD_left,RGBD_right,
-        RGBD_hand
-    ]
-    results = [cam.cli.close(CameraCloseRequest()) for cam in cams]
-    rprint("CLOSE", ", ".join(cam.camera_id for cam in cams), "green")
-    return results
+def close_cam(cam:CameraPipelineConfig):
+    result = cam.cli.close(CameraCloseRequest())
+    rprint("CLOSE", cam.camera_id, "green")
+    return result
+
+def close_rgbd_left():return close_cam(RGBD_left)
+def close_rgbd_right():return close_cam(RGBD_right)
+def close_rgbd_hand():return close_cam(RGBD_hand)
+def close_cams():return [close_rgbd_left(),close_rgbd_right(),close_rgbd_hand()]
 
 def open_cams(cams:list[CameraPipelineConfig]=[RGBD_left,RGBD_right]):
     for cam in cams:
         res = cam.cli.status(EmptyRequest())
-        while not res.online:
-            try:
-                res = cam.cli.open(CameraOpenRequest(device=cam.camera_ip))
-            except Exception as e:
-                console.print("[red]OPEN[/]", cam.camera_id, e)
+        with console.status(f"[red]OPEN[/] {cam.camera_id}", spinner="dots"):
+            while not res.online:
+                try:
+                    res = cam.cli.open(CameraOpenRequest(device=cam.camera_ip,timeout_s=20))
+                except Exception as e:
+                    console.print("[red]OPEN[/]", cam.camera_id, e)
         cam.calib = cam.cli.get_calib(EmptyRequest())
         rprint("OPEN", f"{cam.camera_id} @ {cam.camera_ip}", "green")
     time.sleep(1)
 
+def open_rgbd_left():return open_cams(cams=[RGBD_left])
+def open_rgbd_right():return open_cams(cams=[RGBD_right])
+def open_rgbd_hand():return open_cams(cams=[RGBD_hand])
 def open_dual_rgb():open_cams(cams=[RGBD_left,RGBD_right])
 def open_hand():open_cams(cams=[RGBD_hand])
+
+def status_cam(cam:CameraPipelineConfig):
+    s = json.loads(cam.cli.status(EmptyRequest()).model_dump_json())
+    s["opened"] = s["online"]
+    return s
+
+def status_rgbd_left()->dict:return status_cam(RGBD_left)    
+def status_rgbd_right()->dict:return status_cam(RGBD_right)    
+def status_rgbd_hand()->dict:return status_cam(RGBD_hand)
 
 def capture_cams(store:CustomStore=STORE,
         cams:list[CameraPipelineConfig]=[
@@ -141,7 +155,7 @@ def capture_cams(store:CustomStore=STORE,
                 imgsz=1280, confidence=0.25, iou=0.45,
                 max_detections=100,
                 tile_overlap=416,
-                tile_batch_size=4,
+                tile_batch_size=6,
                 detection_bbox_xyxy=cam.detection_bbox_xyxy,
                 
                 input_jpg_path=str(cam_rec.expected_image_path(stream)),

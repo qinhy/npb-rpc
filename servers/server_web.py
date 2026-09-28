@@ -3,21 +3,27 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import time
 from typing import Dict, List
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 
 from npb_rpc import RedisDiscovery
 
-from servers.msg.dai import CameraInterface
+from npb_rpc._event import RpcEvent
+from servers.msg.dai import CameraFrameSetRequest, CameraInterface
 from servers.server_dai.interface import add_camera_routes
 from servers.msg.yolo import YoloClient, YoloInferenceRequest, YoloInterface, YoloJobRequest, EmptyRequest
-from servers.server_rpc import capture_dual_rgb, capture_hand, close_cams, open_dual_rgb, open_hand
+from servers.server_rpc import (STORE, CameraPipelineConfig, RGBD_hand, RGBD_left, RGBD_right, console,
+                                close_cams, close_rgbd_hand, close_rgbd_left, close_rgbd_right,
+                                open_dual_rgb, open_hand, open_rgbd_hand, open_rgbd_left, open_rgbd_right, rprint,
+                                status_rgbd_hand, status_rgbd_left, status_rgbd_right)
 from servers.server_yolo.interface import add_yolo_routes
-from servers.msg.pcd import PcdInterface
+from servers.msg.pcd import PcdBuildRequest, PcdInterface, PcdJobRequest
 from servers.server_pcd.interface import add_pcd_routes
+from servers.store.custom_record_store import CustomStore, PCDRecord
 
 app = FastAPI(title="Discovered RPC Web API")
 DISCOVERY = RedisDiscovery()
@@ -112,6 +118,125 @@ def debug_yolo():
     )
 
 
+GLOBAL_yolo_config = YoloInferenceRequest(
+    model_name="yolo11l-seg.pt",
+    tile_batch_size=6,
+    tile_overlap=416,
+    
+    imgsz=1280, confidence=0.25, iou=0.45,
+    max_detections=100,
+    input_jpg_path="null",
+    output_json_path="null",
+)
+def yolo_set_config(config:dict):
+    if "model_name" in config:
+        GLOBAL_yolo_config.model_name=config["model_name"]
+    if "tile_batch_size" in config:
+        GLOBAL_yolo_config.tile_batch_size=config["tile_batch_size"]
+    if "confidence" in config:
+        GLOBAL_yolo_config.confidence=config["confidence"]
+    if "tile_overlap" in config:
+        GLOBAL_yolo_config.tile_overlap=config["tile_overlap"]
+    return GLOBAL_yolo_config
+
+GLOBAL_pcd_config = PcdBuildRequest(
+    backend="dnn",
+    max_depth_m=2.0,
+    
+    rgb_jpg_path="null",
+    left_jpg_path="null",
+    right_jpg_path="null",
+    calibration_json_path="null",
+    output_pcd_path="null",
+)
+def pcd_set_config(config:dict):
+    if "backend" in config:
+        if config["backend"]=="sgbm":
+            config["backend"]="cpu"
+        GLOBAL_pcd_config.backend=config["backend"]
+    if "max_depth_m" in config:
+        GLOBAL_pcd_config.max_depth_m=config["max_depth_m"]
+    return GLOBAL_pcd_config
+
+def capture_cams(store:CustomStore=STORE,
+        cams:list[CameraPipelineConfig]=[
+            RGBD_left,RGBD_right,
+            RGBD_hand
+    ]):
+    # store = CustomStore(root_path=Path("../recordings/").absolute())
+    mode="dual_rgb" if len(cams)>1 else "rgbd_hand"
+    timestamp_ns_utc=time.time_ns()
+    record = store.add_record(mode=mode,timestamp_ns_utc=timestamp_ns_utc)
+    rprint("CAP", f"{mode} | {', '.join(cam.camera_id for cam in cams)}", "cyan")
+    for cam in cams:
+        cam.fs = cam.cli.frames(CameraFrameSetRequest())
+
+    for cam in cams:
+        camera_id = cam.camera_id
+        fs = cam.fs
+        record.add_mjpeg_image(camera_id=camera_id,stream="rgb",image_bytes=fs.rgb.tobytes())
+        record.add_mjpeg_image(camera_id=camera_id,stream="left",image_bytes=fs.left.tobytes())
+        record.add_mjpeg_image(camera_id=camera_id,stream="right",image_bytes=fs.right.tobytes())
+        if cam.calib is None:
+            cam.calib = cam.cli.get_calib(EmptyRequest())
+        calib_path = record.add_calibration(camera_id=camera_id,data=json.loads(cam.calib.model_dump_json()))
+        cam_rec = record.get_camera(camera_id)
+
+        if cam.need_yolo:
+            stream = "rgb"
+            yolo_rec = record.add_yolo(camera_id=camera_id,stream=stream,data={})
+            yolo_res = cam.yolo.inference(YoloInferenceRequest(
+                model_name=GLOBAL_yolo_config.model_name,
+                confidence=GLOBAL_yolo_config.confidence,
+                size_mode="tiling",
+                imgsz=1280,
+                iou=0.45,
+                max_detections=100,
+                tile_overlap=416,
+                tile_batch_size=6,
+                detection_bbox_xyxy=cam.detection_bbox_xyxy,
+                
+                input_jpg_path=str(cam_rec.expected_image_path(stream)),
+                output_json_path=str(yolo_rec.expected_data_path()),
+                done_event=RpcEvent.create(),
+            ))
+        
+        if cam.need_pcd and cam.need_yolo:
+            pcd_rec = PCDRecord(parent=record, source_name=camera_id, kind="folder")
+            
+            with console.status(f"[cyan]YOLO[/] {camera_id}", spinner="dots"):
+                yolo_res.done_event.wait()
+            yolo_res.done_event.delete()
+            yolo_res = cam.yolo.job_status(YoloJobRequest(job_id=yolo_res.job_id))
+            rprint("YOLO", f"{camera_id} | {yolo_res.state}",
+                    "green" if yolo_res.state == "succeeded" else "red")
+
+            pcd_res = cam.pcd.build(PcdBuildRequest(
+                backend=GLOBAL_pcd_config.backend,
+                max_depth_m=cam.pcd_max_depth_m,
+
+                rgb_jpg_path=str(cam_rec.expected_rgb_path()),
+                left_jpg_path=str(cam_rec.expected_left_path()),
+                right_jpg_path=str(cam_rec.expected_right_path()),
+                calibration_json_path=str(calib_path),
+                output_pcd_path=str(pcd_rec.expected_full_pcd_path()),
+                detections_json_path=str(yolo_rec.expected_data_path()),
+                segments_output_dir=str(pcd_rec.expected_full_pcd_path().parent),
+                done_event=RpcEvent.create(),
+            ))
+            with console.status(f"[cyan]PCD[/]  {camera_id}", spinner="dots"):
+                pcd_res.done_event.wait()
+            pcd_res.done_event.delete()
+            pcd_res = cam.pcd.job_status(PcdJobRequest(job_id=pcd_res.job_id))
+            rprint("PCD", f"{camera_id} | {pcd_res.state}",
+                    "green" if pcd_res.state == "succeeded" else "red")
+        else:            
+            rprint("YOLO", f"{camera_id} | {yolo_res.state}",
+                    "green" if yolo_res.state == "succeeded" else "red")
+            
+def capture_hand():capture_cams(cams=[RGBD_hand])
+def capture_dual_rgb():capture_cams(cams=[RGBD_left,RGBD_right,])
+
 app.add_api_route("/debug/last_ai_record",
     last_ai_record,methods=["GET"], name="debug", tags=["debug"],)
 
@@ -135,6 +260,45 @@ app.add_api_route("/capture_hand",
 
 app.add_api_route("/capture_dual_rgb",
     capture_dual_rgb,methods=["GET"],tags=["release"],)
+
+# legacy supports
+def do_nothing():
+    return None
+
+app.add_api_route("/controllers/rgbd_left/open", # Open left RGB-D camera |
+    open_rgbd_left,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/rgbd_left/close", # Close left camera |
+    close_rgbd_left,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/rgbd_left/status", # Check left camera status |
+    status_rgbd_left,methods=["POST"],tags=["release"],)
+
+app.add_api_route("/controllers/rgbd_right/open", # Open right RGB-D camera |
+    open_rgbd_right,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/rgbd_right/close", # Close right camera |
+    close_rgbd_right,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/rgbd_right/status", # Check right camera status |
+    status_rgbd_right,methods=["POST"],tags=["release"],)
+
+app.add_api_route("/controllers/rgbd_hand/open", # Open hand RGB-D camera |
+    open_rgbd_hand,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/rgbd_hand/close", # Close hand camera |
+    close_rgbd_hand,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/rgbd_hand/status", # Check hand camera status |
+    status_rgbd_hand,methods=["POST"],tags=["release"],)
+
+app.add_api_route("/controllers/store_dual/capture", # Capture dual-camera record |
+    capture_dual_rgb,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/store_hand/capture", # Capture hand-camera record |
+    capture_hand,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/store_dual/watch", # Watch dual-camera streams |
+    do_nothing,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/store_hand/watch", # Watch hand-camera stream |
+    do_nothing,methods=["POST"],tags=["release"],)
+
+app.add_api_route("/controllers/yolo/set_model", # Configure YOLO model |
+    yolo_set_config,methods=["POST"],tags=["release"],)
+app.add_api_route("/controllers/pcd/set_backend", # Select SGBM/DNN PCD backend |
+    pcd_set_config,methods=["POST"],tags=["release"],)
 
 if __name__ == "__main__":
     refresh_routes()
