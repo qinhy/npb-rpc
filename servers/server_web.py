@@ -306,11 +306,11 @@ def db_find(db_name:Literal["dual_rgb","rgbd_hand"]="rgbd_hand",
     to_section_id = None
     if section == "gnss":
         to_section_id = lambda id:id.split("JST:")[0]+"JST:gnss:baselink"
-
-    if to_section_id:
-        neighbors = [to_section_id(r["_id"]) for r in res]
+        neighbors = set([to_section_id(r["_id"]) for r in res])
+        neighbors = sorted(list(neighbors))
         neighbors = [db.get(sct_id) for sct_id in neighbors]
         res = [r for r in neighbors if r is not None]
+        
     return res
 
 app.add_api_route("/db/find",

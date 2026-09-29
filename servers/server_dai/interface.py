@@ -86,7 +86,7 @@ class CameraService(CameraInterface):
     ) -> CameraControlResponse:
         try:
             if opening:
-                result = self.camera.open_camera(request.device, timeout_s=request.timeout_s)  # type: ignore[attr-defined]
+                result = self.camera.open_camera(request, timeout_s=request.timeout_s)  # type: ignore[attr-defined]
             else:
                 result = self.camera.close_camera(timeout_s=request.timeout_s)
             ok, online, device, generation, error = result

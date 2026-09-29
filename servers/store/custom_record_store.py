@@ -2,7 +2,7 @@
 
 Directory layout::
 
-    <root>/<mode>/<date_utc>/<field_id>/<record_id>/
+    <root>/<mode>/<date_jst>/<field_id>/<record_id>/
         calib/<camera_id>.json
         imgs/<camera_id>/{rgb,left,right}.jpg
         gnss/<kind>.json
@@ -13,9 +13,9 @@ Directory layout::
 The same logical layout is supported on local filesystems and fsspec URLs
 (e.g. ``s3://bucket/prefix``).
 
-``record_id`` stores the capture clock time in JST while ``date_utc`` stores the
-UTC calendar date. The conversion helpers in this module preserve that mixed
-convention when round-tripping timestamps.
+Both ``record_id`` and ``date_jst`` use Japan Standard Time (JST).
+The Unix timestamp remains an absolute nanosecond epoch value, while all
+calendar/date presentation and directory partitioning use JST.
 
 Dependencies:
     - Pydantic v2
@@ -56,8 +56,8 @@ ImageStream = Literal["rgb", "left", "right"]
 PCDKind = Literal["file", "folder"]
 PCDEncoding = Literal["ascii", "binary"]
 
-SCHEMA_VERSION = "1.0"
-WIRE_SCHEMA = "custom-record/v1"
+SCHEMA_VERSION = "2.0"
+WIRE_SCHEMA = "custom-record/v2"
 NS_PER_SECOND = 1_000_000_000
 JST = timezone(timedelta(hours=9), name="JST")
 
@@ -504,11 +504,11 @@ def _validate_suffix(value: str, *, name: str = "suffix") -> str:
     return value
 
 
-def _parse_utc_date(value: str) -> date:
+def _parse_jst_date(value: str) -> date:
     try:
         parsed = datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError as exc:
-        raise ValueError(f"Invalid UTC date {value!r}; expected YYYY-MM-DD") from exc
+        raise ValueError(f"Invalid JST date {value!r}; expected YYYY-MM-DD") from exc
     return parsed
 
 
@@ -525,21 +525,25 @@ def _validate_record_id(record_id: str) -> re.Match[str]:
     return match
 
 
-def datetime_utc_from_timestamp_ns(timestamp_ns_utc: int) -> str:
-    """Return an ISO-like UTC timestamp with nanosecond precision."""
+def datetime_jst_from_timestamp_ns(timestamp_ns_utc: int) -> str:
+    """Return an ISO-like JST timestamp with nanosecond precision."""
     seconds, nsec = divmod(int(timestamp_ns_utc), NS_PER_SECOND)
-    dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
-    return f"{dt:%Y-%m-%dT%H:%M:%S}.{nsec:09d}Z"
+    dt_jst = datetime.fromtimestamp(seconds, tz=timezone.utc).astimezone(JST)
+    return f"{dt_jst:%Y-%m-%dT%H:%M:%S}.{nsec:09d}+09:00"
 
 
-def date_utc_from_timestamp_ns(timestamp_ns_utc: int) -> str:
-    """Return the UTC calendar date (YYYY-MM-DD) for a nanosecond timestamp."""
+def date_jst_from_timestamp_ns(timestamp_ns_utc: int) -> str:
+    """Return the JST calendar date (YYYY-MM-DD) for a nanosecond timestamp."""
     seconds = int(timestamp_ns_utc) // NS_PER_SECOND
-    return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%d")
+    return (
+        datetime.fromtimestamp(seconds, tz=timezone.utc)
+        .astimezone(JST)
+        .strftime("%Y-%m-%d")
+    )
 
 
 def record_id_from_timestamp_ns(timestamp_ns_utc: int, sequence: int = 1) -> str:
-    """Return ``HHMMSS.NNNNNNNNNJST`` for a UTC nanosecond timestamp.
+    """Return ``HHMMSS.NNNNNNNNNJST`` for a Unix nanosecond timestamp.
 
     ``sequence`` is retained for source compatibility with the previous API.
     The on-disk record-id format has no sequence field, so it does not affect
@@ -553,15 +557,13 @@ def record_id_from_timestamp_ns(timestamp_ns_utc: int, sequence: int = 1) -> str
     return f"{dt_jst:%H%M%S}.{nsec:09d}JST"
 
 
-def timestamp_ns_from_date_and_record_id(date_utc: str, record_id: str) -> int:
-    """Reconstruct a UTC nanosecond timestamp from the record directory names.
+def timestamp_ns_from_date_and_record_id(date_jst: str, record_id: str) -> int:
+    """Reconstruct a Unix nanosecond timestamp from JST directory names.
 
-    The directory date is UTC, while ``record_id`` contains a JST clock time.
-    JST is nine hours ahead of UTC, so a JST clock time from 00:00 through
-    08:59 belongs to the day *after* the UTC date directory. Times from 09:00
-    through 23:59 belong to the same calendar date.
+    Both the directory date and ``record_id`` clock time are JST, so they form a
+    single local calendar datetime with no UTC/JST day-boundary adjustment.
     """
-    utc_date = _parse_utc_date(date_utc)
+    jst_date = _parse_jst_date(date_jst)
     match = _validate_record_id(record_id)
 
     hour = int(match.group("hour"))
@@ -569,7 +571,6 @@ def timestamp_ns_from_date_and_record_id(date_utc: str, record_id: str) -> int:
     second = int(match.group("second"))
     nsec = int(match.group("nsec"))
 
-    jst_date = utc_date + timedelta(days=1 if hour < 9 else 0)
     dt_jst = datetime(
         jst_date.year,
         jst_date.month,
@@ -583,26 +584,25 @@ def timestamp_ns_from_date_and_record_id(date_utc: str, record_id: str) -> int:
     epoch_seconds = calendar.timegm(dt_utc.utctimetuple())
     timestamp_ns_utc = epoch_seconds * NS_PER_SECOND + nsec
 
-    # Defensive invariant: the reconstructed timestamp must reproduce both
-    # directory components exactly.
-    if date_utc_from_timestamp_ns(timestamp_ns_utc) != date_utc:
+    # Defensive invariant: reconstruction must reproduce both JST path components.
+    if date_jst_from_timestamp_ns(timestamp_ns_utc) != date_jst:
         raise ValueError(
-            f"date_utc={date_utc!r} and record_id={record_id!r} are inconsistent"
+            f"date_jst={date_jst!r} and record_id={record_id!r} are inconsistent"
         )
     if record_id_from_timestamp_ns(timestamp_ns_utc) != record_id:
         raise ValueError(
-            f"date_utc={date_utc!r} and record_id={record_id!r} are inconsistent"
+            f"date_jst={date_jst!r} and record_id={record_id!r} are inconsistent"
         )
 
     return timestamp_ns_utc
 
 
 def timestamp_info(timestamp_ns_utc: int, sequence: int = 1) -> tuple[str, str]:
-    """Return ``(record_id, date_utc)`` for a UTC nanosecond timestamp."""
+    """Return ``(record_id, date_jst)`` for a Unix nanosecond timestamp, using JST for both path components."""
     timestamp_ns_utc = int(timestamp_ns_utc)
     return (
         record_id_from_timestamp_ns(timestamp_ns_utc, sequence),
-        date_utc_from_timestamp_ns(timestamp_ns_utc),
+        date_jst_from_timestamp_ns(timestamp_ns_utc),
     )
 
 
@@ -1376,7 +1376,7 @@ class CustomRecord(RecordModel):
         "field_id",
         "record_id",
         "timestamp_ns_utc",
-        "date_utc",
+        "date_jst",
         "storage_options",
         "_storage",
     )
@@ -1386,7 +1386,7 @@ class CustomRecord(RecordModel):
     field_id: str
     record_id: str
     timestamp_ns_utc: int
-    date_utc: str | None = None
+    date_jst: str | None = None
     storage_options: dict[str, Any] = Field(default_factory=dict, repr=False)
     storage_backend: Any | None = Field(
         default=None,
@@ -1415,14 +1415,14 @@ class CustomRecord(RecordModel):
 
     @model_validator(mode="after")
     def _validate_timestamp_layout(self) -> "CustomRecord":
-        expected_date = date_utc_from_timestamp_ns(self.timestamp_ns_utc)
-        if self.date_utc is None:
-            self.date_utc = expected_date
+        expected_date = date_jst_from_timestamp_ns(self.timestamp_ns_utc)
+        if self.date_jst is None:
+            self.date_jst = expected_date
         else:
-            _parse_utc_date(self.date_utc)
-            if self.date_utc != expected_date:
+            _parse_jst_date(self.date_jst)
+            if self.date_jst != expected_date:
                 raise ValueError(
-                    f"date_utc={self.date_utc!r} does not match timestamp date "
+                    f"date_jst={self.date_jst!r} does not match timestamp date "
                     f"{expected_date!r}"
                 )
 
@@ -1471,12 +1471,12 @@ class CustomRecord(RecordModel):
 
     @property
     def path(self) -> RecordPath:
-        assert self.date_utc is not None
-        return self.storage.path(self.mode, self.date_utc, self.field_id, self.record_id)
+        assert self.date_jst is not None
+        return self.storage.path(self.mode, self.date_jst, self.field_id, self.record_id)
 
     @property
-    def datetime_utc(self) -> str:
-        return datetime_utc_from_timestamp_ns(self.timestamp_ns_utc)
+    def datetime_jst(self) -> str:
+        return datetime_jst_from_timestamp_ns(self.timestamp_ns_utc)
 
     def to_dict(
         self,
@@ -1507,8 +1507,8 @@ class CustomRecord(RecordModel):
             "field_id": self.field_id,
             "record_id": self.record_id,
             "timestamp_ns_utc": self.timestamp_ns_utc,
-            "date_utc": self.date_utc,
-            "datetime_utc": self.datetime_utc,
+            "date_jst": self.date_jst,
+            "datetime_jst": self.datetime_jst,
         }
 
     def to_json(
@@ -1576,9 +1576,9 @@ class CustomRecord(RecordModel):
                 "on the client"
             )
 
-        date_value = data.get("date_utc")
+        date_value = data.get("date_jst")
         if date_value is not None and not isinstance(date_value, str):
-            raise ValueError("date_utc must be a string or null")
+            raise ValueError("date_jst must be a string or null")
 
         payload_storage_options = data.get("storage_options", {})
         if payload_storage_options is None:
@@ -1597,7 +1597,7 @@ class CustomRecord(RecordModel):
             field_id=str(data["field_id"]),
             record_id=str(data["record_id"]),
             timestamp_ns_utc=int(data["timestamp_ns_utc"]),
-            date_utc=date_value,
+            date_jst=date_value,
             storage_options=selected_storage_options,
             _storage=_storage,
         )
@@ -1658,14 +1658,14 @@ class CustomRecord(RecordModel):
         root_path_obj = mode_path.parent
 
         field_id = field_path.name
-        date_utc = date_path.name
+        date_jst = date_path.name
         mode_text = mode_path.name
-        if not all((record_id, field_id, date_utc, mode_text)):
+        if not all((record_id, field_id, date_jst, mode_text)):
             raise ValueError(f"Path is too short to be a record path: {path}")
         if mode_text not in VALID_MODES:
             raise ValueError(f"Unsupported mode in path: {mode_text!r}")
 
-        timestamp_ns_utc = timestamp_ns_from_date_and_record_id(date_utc, record_id)
+        timestamp_ns_utc = timestamp_ns_from_date_and_record_id(date_jst, record_id)
         storage = record_path.storage.subtree(root_path_obj.key)
         return cls(
             root_path=storage.root_url,
@@ -1673,7 +1673,7 @@ class CustomRecord(RecordModel):
             field_id=field_id,
             record_id=record_id,
             timestamp_ns_utc=timestamp_ns_utc,
-            date_utc=date_utc,
+            date_jst=date_jst,
             storage_options=dict(storage.storage_options),
             _storage=storage,
         )
@@ -1784,7 +1784,7 @@ class CustomRecord(RecordModel):
             field_id=self.field_id,
             record_id=self.record_id,
             timestamp_ns_utc=self.timestamp_ns_utc,
-            date_utc=self.date_utc,
+            date_jst=self.date_jst,
             storage_options=dict(storage_options or {}),
         )
     
@@ -1798,7 +1798,7 @@ class CustomRecord(RecordModel):
             field_id=self.field_id,
             record_id=self.record_id,
             timestamp_ns_utc=self.timestamp_ns_utc,
-            date_utc=self.date_utc,
+            date_jst=self.date_jst,
             storage_options={},
         )
 
@@ -1813,7 +1813,7 @@ class CustomRecord(RecordModel):
             {
                 "schema_version": SCHEMA_VERSION,
                 "timestamp_ns_utc": self.timestamp_ns_utc,
-                "datetime_utc": self.datetime_utc,
+                "datetime_jst": self.datetime_jst,
             },
         )
         return self.expected_commit_path
@@ -1958,14 +1958,14 @@ class CustomStore(RecordModel):
         sequence: int = 1,
         exist_ok: bool = False,
     ) -> CustomRecord:
-        record_id, date_utc = timestamp_info(timestamp_ns_utc, sequence)
+        record_id, date_jst = timestamp_info(timestamp_ns_utc, sequence)
         record = CustomRecord(
             root_path=self.root_path,
             mode=mode,
             field_id=field_id,
             record_id=record_id,
             timestamp_ns_utc=timestamp_ns_utc,
-            date_utc=date_utc,
+            date_jst=date_jst,
             storage_options=dict(self.storage_options),
             _storage=self._storage,
         )
@@ -2002,7 +2002,7 @@ class CustomStore(RecordModel):
         if mode is not None and mode not in VALID_MODES:
             raise ValueError(f"Unsupported mode: {mode!r}")
         if date is not None:
-            _parse_utc_date(date)
+            _parse_jst_date(date)
         if field_id is not None:
             _validate_path_component(field_id, name="field_id")
 
@@ -2065,7 +2065,7 @@ class CustomStore(RecordModel):
         field_id: str = "field_all",
         committed_only: bool | None = None,
     ) -> list[CustomRecord]:
-        """Return records whose UTC timestamps fall within an inclusive range."""
+        """Return records whose timestamps fall within an inclusive range, scanning JST date partitions."""
         if mode not in VALID_MODES:
             raise ValueError(f"Unsupported mode: {mode!r}")
 
@@ -2075,14 +2075,16 @@ class CustomStore(RecordModel):
         if start_time_ns > end_time_ns:
             raise ValueError("start_time_ns must be less than or equal to end_time_ns")
 
-        start_date = datetime.fromtimestamp(
-            start_time_ns // NS_PER_SECOND,
-            tz=timezone.utc,
-        ).date()
-        end_date = datetime.fromtimestamp(
-            end_time_ns // NS_PER_SECOND,
-            tz=timezone.utc,
-        ).date()
+        start_date = (
+            datetime.fromtimestamp(start_time_ns // NS_PER_SECOND, tz=timezone.utc)
+            .astimezone(JST)
+            .date()
+        )
+        end_date = (
+            datetime.fromtimestamp(end_time_ns // NS_PER_SECOND, tz=timezone.utc)
+            .astimezone(JST)
+            .date()
+        )
 
         records: list[CustomRecord] = []
         current_date = start_date

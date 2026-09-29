@@ -18,6 +18,11 @@ class CameraOpenRequest(BinaryModel):
     """Open a DepthAI device. Empty device means automatic device selection."""
 
     device: str = "169.254.1.222"
+    rgb_size: tuple[int, int] = (3872, 3008)
+    stereo_size: tuple[int, int] = (1280, 800)
+    mjpeg_quality: int = 95
+    fps: float = 10.0
+    max_exposure_us: int = 16667
     timeout_s: float = 20.0
 
 

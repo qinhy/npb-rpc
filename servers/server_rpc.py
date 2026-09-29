@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import time
 
+import cv2
+import numpy as np
 from rich.console import Console
 
 from npb_rpc import RedisDiscovery,RpcEvent
@@ -122,11 +124,29 @@ def status_rgbd_left()->dict:return status_cam(RGBD_left)
 def status_rgbd_right()->dict:return status_cam(RGBD_right)    
 def status_rgbd_hand()->dict:return status_cam(RGBD_hand)
 
+def debug_show_frame(camera_id: str, stream: str, frame) -> None:
+    """Decode JPEG/MJPEG frame and show it with OpenCV."""
+    if frame is None:
+        return
+
+    # frame may be ndarray, memoryview, bytes, etc.
+    if isinstance(frame, np.ndarray) and frame.ndim >= 2:
+        image = frame
+    else:
+        encoded = np.frombuffer(frame, dtype=np.uint8)
+        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+
+    if image is None:
+        print(f"[DEBUG] Failed to decode {camera_id}/{stream}")
+        return
+    cv2.imshow(f"{camera_id} | {stream}", image)
+
+
 def capture_cams(store:CustomStore=STORE,
         cams:list[CameraPipelineConfig]=[
             RGBD_left,RGBD_right,
             RGBD_hand
-    ]):
+    ],debug_view=True):
     # store = CustomStore(root_path=Path("../recordings/").absolute())
     mode="dual_rgb" if len(cams)>1 else "rgbd_hand"
     timestamp_ns_utc=time.time_ns()
@@ -135,6 +155,17 @@ def capture_cams(store:CustomStore=STORE,
     for cam in cams:
         cam.fs = cam.cli.frames(CameraFrameSetRequest())
 
+    # ----------------------------------------------------------
+    # Debug view
+    # ----------------------------------------------------------
+    if debug_view:
+        for cam in cams:
+            fs = cam.fs
+            debug_show_frame(cam.camera_id, "rgb", fs.rgb)
+            debug_show_frame(cam.camera_id, "left", fs.left)
+            debug_show_frame(cam.camera_id, "right", fs.right)
+        cv2.waitKey(1)
+        
     for cam in cams:
         camera_id = cam.camera_id
         fs = cam.fs
@@ -216,6 +247,8 @@ if __name__=="__main__":
     # )
     # res = method_post("pcd","pcd","build",json.loads(pcd_args.model_dump_json()))
     store = CustomStore(root_path=Path("./recordings/").absolute())
+    close_cams()
+
     for i in range(10):
         open_hand()
         for i in range(10):
@@ -226,7 +259,9 @@ if __name__=="__main__":
         for i in range(10):
             capture_cams(store,[RGBD_left,RGBD_right,])
         close_cams()
-        time.sleep(20)
+        time.sleep(5)
+        
+    cv2.destroyAllWindows()
     pass
 
 

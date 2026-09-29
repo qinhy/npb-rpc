@@ -17,7 +17,7 @@ from typing import Any, Generic, Literal, TypeVar
 import depthai as dai
 from depthai_camera_stream import CameraStream
 
-from servers.msg.dai import CameraCalibrationResponse, CameraStatusResponse
+from servers.msg.dai import CameraCalibrationResponse, CameraOpenRequest, CameraStatusResponse
 from servers.server_dai.session_supervisor import (
     RetryPolicy,
     SessionControl,
@@ -156,7 +156,7 @@ class DaiStereoCameraStream:
     resize_mode: str = "CROP"
     max_exposure_us: int = 16667
 
-    def build(self, pipeline: Any) -> dict[str, Any]:
+    def build(self, pipeline: Any):
         common = dict(
             pipeline=pipeline,
             fps=self.fps,
@@ -232,7 +232,7 @@ class DepthAISessionHandler:
             if control.cancelled:
                 return
 
-            streams = self.config.build(pipeline)
+            streams:dict[str, CameraStream] = self.config.build(pipeline)
             calibration = CameraCalibrationResponse(
                 ok=True,
                 camera_online=True,
@@ -414,8 +414,15 @@ class CameraSupervisor:
         except TimeoutError:
             LOG.warning("camera session worker did not exit within 5 seconds")
 
-    def open_camera(self, device: str = "", *, timeout_s: float = 10.0) -> CameraActionResult:
+    def open_camera(self, request: CameraOpenRequest, *, timeout_s: float = 10.0) -> CameraActionResult:
         """Open/switch camera and optionally wait for ONLINE."""
+        device = request.device
+        self.handler.config.rgb_size=request.rgb_size
+        self.handler.config.stereo_size=request.stereo_size
+        self.handler.config.mjpeg_quality=request.mjpeg_quality
+        self.handler.config.fps=request.fps
+        self.handler.config.max_exposure_us=request.max_exposure_us
+
         target, timeout_s = device.strip(), max(0.0, float(timeout_s))
         self._auto_open_pending = False
         before = self.supervisor.status()
