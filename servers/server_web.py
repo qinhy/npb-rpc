@@ -273,32 +273,35 @@ app.add_api_route("/open_dual_rgb",
     open_dual_rgb,methods=["GET"],tags=["release"],)
 
 app.add_api_route("/capture_hand",
-    capture_hand,methods=["GET"],tags=["release"],)
+    capture_hand,methods=["POST"],tags=["release"],)
 
 app.add_api_route("/capture_dual_rgb",
-    capture_dual_rgb,methods=["GET"],tags=["release"],)
+    capture_dual_rgb,methods=["POST"],tags=["release"],)
 
 
-def db_find(query:dict,fields=["_id","_attachments"],
-            section:Literal["gnss"]=""):
+def db_find(db_name:Literal["dual_rgb","rgbd_hand"]="rgbd_hand",
+            query:dict = {
+                "_id": {
+                    "$gte": "2026-09-29:field_all:090000.000000000JST",
+                    "$lt":  "2026-09-29:field_all:170000.000000000JST",
+                    "$regex": ":yolo:",
+                },
+                "detections": {
+                    "$elemMatch": {
+                        "class_name": "suitcase",
+                        "confidence": {"$gte": 0.01}
+                    }
+                }
+            },
+            fields:list[str]=["_id","_attachments"],
+            section:Literal["null","gnss"]="null"):
     if sys.platform == "win32":
         root = Path("./recordings/").absolute()
     elif sys.platform.startswith("linux"):
         root = Path("/data/recordings/").absolute()
-    db = FileSystemDB(root=root)
-    # query = {
-    #     "_id": {
-    #         "$gte": "2026-09-29:field_all:090000.000000000JST",
-    #         "$lt":  "2026-09-29:field_all:170000.000000000JST",
-    #         "$regex": ":yolo:",
-    #     },
-    #     "detections": {
-    #         "$elemMatch": {
-    #             "class_name": "suitcase",
-    #             "confidence": {"$gte": 0.01}
-    #         }
-    #     }
-    # }
+
+    db = FileSystemDB(root=root/db_name)
+
     res = db.find(query,fields=fields)
     to_section_id = None
     if section == "gnss":
@@ -309,10 +312,10 @@ def db_find(query:dict,fields=["_id","_attachments"],
         neighbors = [db.get(sct_id) for sct_id in neighbors]
         res = [r for r in neighbors if r is not None]
     return res
-        
 
 app.add_api_route("/db/find",
-    db_find,methods=["POST"],tags=["release"],)
+    db_find,methods=["POST"],tags=["db"],)
+
 
 # legacy supports
 def do_nothing():

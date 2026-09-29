@@ -109,7 +109,124 @@ def id_parent(doc_id: str) -> str | None:
     return doc_id.rsplit(":", 1)[0]
 
 
-def rglob_documents(root: str | Path) -> Iterator[Document]:
+
+def document_from_id(root: str | Path, doc_id: str) -> Document | None:
+    """Resolve one virtual document without scanning the whole database."""
+    root = Path(root).resolve()
+    resource = root.joinpath(*doc_id.split(":"))
+
+    if resource.is_dir():
+        sidecar_json = resource.parent / f"{resource.name}.json"
+        json_file = sidecar_json if sidecar_json.is_file() else None
+
+        attachments = [
+            Attachment(
+                path=child,
+                relative_path=child.relative_to(root),
+            )
+            for child in sorted(resource.iterdir(), key=lambda p: p.name)
+            if child.is_file() and child.suffix.lower() != ".json"
+        ]
+
+        return Document(
+            id=doc_id,
+            parent=id_parent(doc_id),
+            json_file=json_file,
+            attachments=attachments,
+        )
+
+    json_file = resource.with_suffix(".json")
+    if json_file.is_file():
+        return Document(
+            id=doc_id,
+            parent=id_parent(doc_id),
+            json_file=json_file,
+            attachments=[],
+        )
+
+    return None
+
+
+def _id_date_scope(
+    selector: dict[str, Any],
+) -> tuple[set[str] | None, str | None, str | None] | None:
+    """
+    Extract a conservative YYYY-MM-DD scope from a direct _id condition.
+
+    Returns (exact_dates, lower_date, upper_date).
+
+    Date bounds are intentionally inclusive. MemoryDB still evaluates the full
+    _id condition, so loading one extra boundary date is safe.
+    """
+    condition = selector.get("_id", MISSING)
+
+    if condition is MISSING:
+        return None
+
+    def date_part(value: Any) -> str | None:
+        if not isinstance(value, str) or len(value) < 10:
+            return None
+
+        candidate = value[:10]
+
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
+            return None
+
+        if len(value) > 10 and value[10] != ":":
+            return None
+
+        return candidate
+
+    if isinstance(condition, str):
+        d = date_part(condition)
+        return ({d}, None, None) if d is not None else None
+
+    if not isinstance(condition, dict):
+        return None
+
+    for op in ("$eq", "$beginsWith"):
+        if op in condition:
+            d = date_part(condition[op])
+            if d is not None:
+                return ({d}, None, None)
+
+    if "$in" in condition and isinstance(condition["$in"], (list, tuple, set)):
+        dates: set[str] = set()
+        for value in condition["$in"]:
+            d = date_part(value)
+            if d is None:
+                return None
+            dates.add(d)
+        return (dates, None, None)
+
+    lower = None
+    upper = None
+
+    for op in ("$gte", "$gt"):
+        if op in condition:
+            lower = date_part(condition[op])
+            if lower is None:
+                return None
+            break
+
+    for op in ("$lte", "$lt"):
+        if op in condition:
+            upper = date_part(condition[op])
+            if upper is None:
+                return None
+            break
+
+    if lower is None and upper is None:
+        return None
+
+    return (None, lower, upper)
+
+
+def rglob_documents(
+    root: str | Path,
+    *,
+    scan_root: str | Path | None = None,
+) -> Iterator[Document]:
     """
     Scan an ordinary filesystem as a tree of virtual documents.
 
@@ -119,6 +236,7 @@ def rglob_documents(root: str | Path) -> Iterator[Document]:
     - Unconsumed JSON files become standalone leaf documents.
     """
     root = Path(root).resolve()
+    scan_root = root if scan_root is None else Path(scan_root).resolve()
 
     if not root.exists():
         raise FileNotFoundError(root)
@@ -126,7 +244,22 @@ def rglob_documents(root: str | Path) -> Iterator[Document]:
     if not root.is_dir():
         raise NotADirectoryError(root)
 
-    paths = sorted(root.rglob("*"), key=lambda p: p.as_posix())
+    if not scan_root.exists():
+        return
+
+    if not scan_root.is_dir():
+        raise NotADirectoryError(scan_root)
+
+    try:
+        scan_root.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"scan_root must be below root: {scan_root}") from exc
+
+    # Keep document IDs relative to the DB root, while walking only one subtree.
+    paths = list(scan_root.rglob("*"))
+    if scan_root != root:
+        paths.append(scan_root)
+    paths = sorted(paths, key=lambda p: p.as_posix())
     directories = [p for p in paths if p.is_dir()]
     files = [p for p in paths if p.is_file()]
 
@@ -141,7 +274,7 @@ def rglob_documents(root: str | Path) -> Iterator[Document]:
         doc_id = relative_to_id(rel_dir)
 
         sidecar_json = directory.parent / f"{directory.name}.json"
-        json_file = sidecar_json if sidecar_json in json_files else None
+        json_file = sidecar_json if sidecar_json.is_file() else None
 
         if json_file is not None:
             consumed_json.add(json_file)
@@ -381,22 +514,79 @@ class FileSystemDB:
     Pure-Python V0.
 
     Filesystem = source of truth.
-    Query = materialize virtual documents -> temporary MemoryDB -> find().
+    Query = materialize only the relevant date subtree(s) -> MemoryDB -> find().
     """
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self._db = None
 
-    def _memory_db(self) -> MemoryDB:
-        return MemoryDB(
-            doc.load()
-            for doc in rglob_documents(self.root)
-        )
+    def _date_scan_roots(
+        self,
+        selector: dict[str, Any],
+    ) -> list[Path] | None:
+        """
+        Return matching top-level YYYY-MM-DD directories.
+
+        None means the selector cannot be safely narrowed by date, so the
+        caller must fall back to scanning the whole root.
+        """
+        scope = _id_date_scope(selector)
+
+        if scope is None:
+            return None
+
+        exact_dates, lower_date, upper_date = scope
+        roots: list[Path] = []
+
+        for child in sorted(self.root.iterdir(), key=lambda p: p.name):
+            if not child.is_dir():
+                continue
+
+            name = child.name
+
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", name):
+                continue
+
+            if exact_dates is not None and name not in exact_dates:
+                continue
+
+            if lower_date is not None and name < lower_date:
+                continue
+
+            if upper_date is not None and name > upper_date:
+                continue
+
+            roots.append(child)
+
+        return roots
+
+    def _memory_db(self, selector: dict[str, Any]) -> MemoryDB:
+        scan_roots = self._date_scan_roots(selector)
+
+        if scan_roots is None:
+            documents = rglob_documents(self.root)
+        else:
+            documents = (
+                doc
+                for scan_root in scan_roots
+                for doc in rglob_documents(self.root, scan_root=scan_root)
+            )
+
+        return MemoryDB(doc.load() for doc in documents)
 
     def get(self, doc_id: str) -> dict[str, Any] | None:
-        return self._db.get(doc_id)
-    
+        # Reuse the most recently loaded date scope when possible.
+        if self._db is not None:
+            cached = self._db.get(doc_id)
+            if cached is not None:
+                return cached
+
+        # Date-scoped find() no longer guarantees that every DB document is
+        # cached, so resolve an individual miss directly from the filesystem.
+        document = document_from_id(self.root, doc_id)
+        return None if document is None else document.load()
+
     def find(
         self,
         selector: dict[str, Any],
@@ -404,7 +594,7 @@ class FileSystemDB:
         fields: list[str] | None = None,
         limit: int | None = None,
     ):
-        self._db = self._memory_db()
+        self._db = self._memory_db(selector)
         return self._db.find(
             selector,
             fields=fields,
