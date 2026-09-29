@@ -2,6 +2,7 @@ from __future__ import annotations
 from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass
 import json
+import shutil
 from servers.logger import logging
 import os
 from pathlib import Path
@@ -730,6 +731,8 @@ class PcdCalculator:
                 binary_pcd=request.binary_pcd,
                 ops=self.numpy_ops,
             )
+            shutil.copy(detections_path,str(segments_output_dir) + ".json")
+
             segments = [PcdSegment(
                 detection_index=int(item['detection_index']),
                 class_id=int(item['class_id']),
@@ -750,7 +753,6 @@ class PcdCalculator:
             + timing.segmentation_ms
             + timing.write_ms
         )
-        if request.done_event:request.done_event.set()
         return PcdBuildResult(
             **request.model_dump(),
             backend_used=entry.backend,
@@ -1054,6 +1056,9 @@ class PcdWorker:
         except Exception as exc:
             LOG.exception('PCD job %s failed', job_id)
             self.store.fail(job_id, f'{type(exc).__name__}: {exc}')
+
+        finally:
+            if request.done_event:request.done_event.set()
 
     def _resolve_image_path(self, value: str) -> Path:
         path = resolve_path(value, self._read_root)

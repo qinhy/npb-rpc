@@ -162,7 +162,8 @@ def capture_cams(store:CustomStore=STORE,
         cams:list[CameraPipelineConfig]=[
             RGBD_left,RGBD_right,
             RGBD_hand
-    ]):
+    ],
+    params={}):
     # store = CustomStore(root_path=Path("../recordings/").absolute())
     mode="dual_rgb" if len(cams)>1 else "rgbd_hand"
     timestamp_ns_utc=time.time_ns()
@@ -170,6 +171,14 @@ def capture_cams(store:CustomStore=STORE,
     rprint("CAP", f"{mode} | {', '.join(cam.camera_id for cam in cams)}", "cyan")
     for cam in cams:
         cam.fs = cam.cli.frames(CameraFrameSetRequest())
+
+    if "meta" in params and "gnss" in params["meta"]:
+        record.add_gnss(params["meta"]["gnss"])
+
+    if "meta" in params and "arm" in params["meta"]:
+        arm = record.get_arm()
+        arm.add_result(run_id=params["meta"]["arm"]["run_id"],
+                       data=params["meta"]["arm"]["data"])
 
     for cam in cams:
         camera_id = cam.camera_id
@@ -234,8 +243,14 @@ def capture_cams(store:CustomStore=STORE,
             rprint("YOLO", f"{camera_id} | {yolo_res.state}",
                     "green" if yolo_res.state == "succeeded" else "red")
             
-def capture_hand():capture_cams(cams=[RGBD_hand])
-def capture_dual_rgb():capture_cams(cams=[RGBD_left,RGBD_right,])
+def capture_hand(params:dict={"meta": {
+                        # "gnss":{"the_data":"xxxxxxxxx"},
+                        # "arm":{"run_id":"UUIDXXXX","data":"xxxxxxxxx"}
+                }}):capture_cams(cams=[RGBD_hand],params=params)
+def capture_dual_rgb(params:dict={"meta": {
+                        # "gnss":{"the_data":"xxxxxxxxx"},
+                        # "arm":{"run_id":"UUIDXXXX","data":"xxxxxxxxx"}
+                }}):capture_cams(cams=[RGBD_left,RGBD_right,],params=params)
 
 app.add_api_route("/debug/last_ai_record",
     last_ai_record,methods=["GET"], name="debug", tags=["debug"],)
