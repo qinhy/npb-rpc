@@ -96,13 +96,16 @@ def close_rgbd_right():return close_cam(RGBD_right)
 def close_rgbd_hand():return close_cam(RGBD_hand)
 def close_cams():return [close_rgbd_left(),close_rgbd_right(),close_rgbd_hand()]
 
-def open_cams(cams:list[CameraPipelineConfig]=[RGBD_left,RGBD_right]):
+def open_cams(cams:list[CameraPipelineConfig]=[RGBD_left,RGBD_right],params=None):
     for cam in cams:
         res = cam.cli.status(EmptyRequest())
         with console.status(f"[red]OPEN[/] {cam.camera_id}", spinner="dots"):
             while not res.online:
                 try:
-                    res = cam.cli.open(CameraOpenRequest(device=cam.camera_ip,timeout_s=20))
+                    if params is None or not isinstance(params,CameraOpenRequest):
+                        params = CameraOpenRequest(device=cam.camera_ip,timeout_s=20)
+                    params.device=cam.camera_ip
+                    res = cam.cli.open(params)
                 except Exception as e:
                     console.print("[red]OPEN[/]", cam.camera_id, e)
         cam.calib = cam.cli.get_calib(EmptyRequest())
@@ -112,8 +115,8 @@ def open_cams(cams:list[CameraPipelineConfig]=[RGBD_left,RGBD_right]):
 def open_rgbd_left():return open_cams(cams=[RGBD_left])
 def open_rgbd_right():return open_cams(cams=[RGBD_right])
 def open_rgbd_hand():return open_cams(cams=[RGBD_hand])
-def open_dual_rgb():open_cams(cams=[RGBD_left,RGBD_right])
-def open_hand():open_cams(cams=[RGBD_hand])
+def open_dual_rgb(params:CameraOpenRequest):open_cams(cams=[RGBD_left,RGBD_right],params=params)
+def open_hand(params:CameraOpenRequest):open_cams(cams=[RGBD_hand],params=params)
 
 def status_cam(cam:CameraPipelineConfig):
     s = json.loads(cam.cli.status(EmptyRequest()).model_dump_json())

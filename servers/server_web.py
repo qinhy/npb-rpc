@@ -131,7 +131,7 @@ GLOBAL_yolo_config = YoloInferenceRequest(
     input_jpg_path="null",
     output_json_path="null",
 )
-def yolo_set_config(config:dict):
+def yolo_set_config(config:dict=GLOBAL_yolo_config.model_dump()):
     if "model_name" in config:
         GLOBAL_yolo_config.model_name=config["model_name"]
     if "tile_batch_size" in config:
@@ -152,7 +152,7 @@ GLOBAL_pcd_config = PcdBuildRequest(
     calibration_json_path="null",
     output_pcd_path="null",
 )
-def pcd_set_config(config:dict):
+def pcd_set_config(config:dict=GLOBAL_pcd_config.model_dump()):
     if "backend" in config:
         if config["backend"]=="sgbm":
             config["backend"]="cpu"
@@ -245,15 +245,18 @@ def capture_cams(store:CustomStore=STORE,
         else:            
             rprint("YOLO", f"{camera_id} | {yolo_res.state}",
                     "green" if yolo_res.state == "succeeded" else "red")
-            
+
+
+    return {"db_name":record.mode,"_id":f":{record.date_jst}:{record.field_id}:{record.record_id}"}
+    
 def capture_hand(params:dict={"meta": {
                         # "gnss":{"the_data":"xxxxxxxxx"},
                         # "arm":{"run_id":"UUIDXXXX","data":"xxxxxxxxx"}
-                }}):capture_cams(cams=[RGBD_hand],params=params)
+                }}):return capture_cams(cams=[RGBD_hand],params=params)
 def capture_dual_rgb(params:dict={"meta": {
                         # "gnss":{"the_data":"xxxxxxxxx"},
                         # "arm":{"run_id":"UUIDXXXX","data":"xxxxxxxxx"}
-                }}):capture_cams(cams=[RGBD_left,RGBD_right,],params=params)
+                }}):return capture_cams(cams=[RGBD_left,RGBD_right,],params=params)
 
 app.add_api_route("/debug/last_ai_record",
     last_ai_record,methods=["GET"], name="debug", tags=["debug"],)
@@ -268,10 +271,10 @@ app.add_api_route("/close_cams",
     close_cams,methods=["GET"],tags=["release"],)
 
 app.add_api_route("/open_hand",
-    open_hand,methods=["GET"],tags=["release"],)
+    open_hand,methods=["POST"],tags=["release"],)
 
 app.add_api_route("/open_dual_rgb",
-    open_dual_rgb,methods=["GET"],tags=["release"],)
+    open_dual_rgb,methods=["POST"],tags=["release"],)
 
 app.add_api_route("/capture_hand",
     capture_hand,methods=["POST"],tags=["release"],)
