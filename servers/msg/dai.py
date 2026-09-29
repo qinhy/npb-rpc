@@ -18,7 +18,7 @@ class CameraOpenRequest(BinaryModel):
     """Open a DepthAI device. Empty device means automatic device selection."""
 
     device: str = "169.254.1.222"
-    timeout_s: float = 10.0
+    timeout_s: float = 20.0
 
 
 @binary_schema("npb-rpc.dai.camera.close.request", version=1)
