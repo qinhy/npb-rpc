@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import sys
 import time
-from typing import Dict, List
+from typing import Dict, List, Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -24,6 +25,7 @@ from servers.server_yolo.interface import add_yolo_routes
 from servers.msg.pcd import PcdBuildRequest, PcdInterface, PcdJobRequest
 from servers.server_pcd.interface import add_pcd_routes
 from servers.store.custom_record_store import CustomStore, PCDRecord
+from servers.store.fs_nosql import FileSystemDB
 
 app = FastAPI(title="Discovered RPC Web API")
 DISCOVERY = RedisDiscovery()
@@ -275,6 +277,42 @@ app.add_api_route("/capture_hand",
 
 app.add_api_route("/capture_dual_rgb",
     capture_dual_rgb,methods=["GET"],tags=["release"],)
+
+
+def db_find(query:dict,fields=["_id","_attachments"],
+            section:Literal["gnss"]=""):
+    if sys.platform == "win32":
+        root = Path("./recordings/").absolute()
+    elif sys.platform.startswith("linux"):
+        root = Path("/data/recordings/").absolute()
+    db = FileSystemDB(root=root)
+    # query = {
+    #     "_id": {
+    #         "$gte": "2026-09-29:field_all:090000.000000000JST",
+    #         "$lt":  "2026-09-29:field_all:170000.000000000JST",
+    #         "$regex": ":yolo:",
+    #     },
+    #     "detections": {
+    #         "$elemMatch": {
+    #             "class_name": "suitcase",
+    #             "confidence": {"$gte": 0.01}
+    #         }
+    #     }
+    # }
+    res = db.find(query,fields=fields)
+    to_section_id = None
+    if section == "gnss":
+        to_section_id = lambda id:id.split("JST:")[0]+"JST:gnss:baselink"
+
+    if to_section_id:
+        neighbors = [to_section_id(r["_id"]) for r in res]
+        neighbors = [db.get(sct_id) for sct_id in neighbors]
+        res = [r for r in neighbors if r is not None]
+    return res
+        
+
+app.add_api_route("/db/find",
+    db_find,methods=["POST"],tags=["release"],)
 
 # legacy supports
 def do_nothing():
