@@ -5,11 +5,12 @@ import os
 from pathlib import Path
 import sys
 import time
-from typing import Dict, List, Literal
+from typing import Any, Dict, List, Literal
 
+from pydantic import BaseModel
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from npb_rpc import RedisDiscovery
 
@@ -279,8 +280,18 @@ app.add_api_route("/capture_dual_rgb",
     capture_dual_rgb,methods=["POST"],tags=["release"],)
 
 
-def db_find(db_name:Literal["dual_rgb","rgbd_hand"]="rgbd_hand",
-            query:dict = {
+DBName = Literal["dual_rgb", "rgbd_hand"]
+
+def get_db(db_name: DBName) -> FileSystemDB:
+    root = Path("./recordings/" if sys.platform == "win32" else "/data/recordings/").absolute()
+    return FileSystemDB(root=root / db_name)
+
+def not_found(reason="missing"):
+    return JSONResponse(status_code=404, content={"error": "not_found", "reason": reason})
+
+class FindRequest(BaseModel):
+    selector: dict[str, Any] = {
+                # "_id": "2026-09-29:field_all:090000.000000000JST:yolo:camera_front:rgb"
                 "_id": {
                     "$gte": "2026-09-29:field_all:090000.000000000JST",
                     "$lt":  "2026-09-29:field_all:170000.000000000JST",
@@ -288,33 +299,46 @@ def db_find(db_name:Literal["dual_rgb","rgbd_hand"]="rgbd_hand",
                 },
                 "detections": {
                     "$elemMatch": {
-                        "class_name": "suitcase",
+                        "class_name": "tie",
                         "confidence": {"$gte": 0.01}
                     }
                 }
-            },
-            fields:list[str]=["_id","_attachments"],
-            section:Literal["null","gnss"]="null"):
-    if sys.platform == "win32":
-        root = Path("./recordings/").absolute()
-    elif sys.platform.startswith("linux"):
-        root = Path("/data/recordings/").absolute()
+            }
+    fields: list[str] = ["_id","_attachments"]    
+    # limit: int = 25
+    # skip: int = 0
+    section:Literal["null","gnss"]="null"
 
-    db = FileSystemDB(root=root/db_name)
-
-    res = db.find(query,fields=fields)
+def db_find(db_name: DBName, req: FindRequest):
+    db = get_db(db_name)
+    docs = list(db.find(req.selector, fields=req.fields))
     to_section_id = None
-    if section == "gnss":
+    if req.section == "gnss":
         to_section_id = lambda id:id.split("JST:")[0]+"JST:gnss:baselink"
-        neighbors = set([to_section_id(r["_id"]) for r in res])
+        neighbors = set([to_section_id(r["_id"]) for r in docs])
         neighbors = sorted(list(neighbors))
         neighbors = [db.get(sct_id) for sct_id in neighbors]
-        res = [r for r in neighbors if r is not None]
-        
-    return res
+        docs = [r for r in neighbors if r is not None]
+    return docs
+    # return {"docs": docs[req.skip:req.skip + req.limit]}
 
-app.add_api_route("/db/find",
-    db_find,methods=["POST"],tags=["db"],)
+def db_get(db_name: DBName, doc_id: str):
+    doc = get_db(db_name).get(doc_id)
+    return doc if doc is not None else not_found()
+
+def db_get_attachment(db_name: DBName, doc_id: str, attachment_name: str):
+    db = get_db(db_name)
+    doc = db.get(doc_id)
+    if doc is None: return not_found()
+    att = doc.get("_attachments", {}).get(attachment_name)
+    if att is None: return not_found()
+    path = db.root / att["path"]
+    return FileResponse(path) if path.is_file() else not_found()
+
+app.add_api_route("/db/{db_name}/_find", db_find, methods=["POST"], tags=["db"])
+app.add_api_route("/db/{db_name}/{doc_id}", db_get, methods=["GET"], tags=["db"])
+app.add_api_route("/db/{db_name}/{doc_id}/{attachment_name}",
+                  db_get_attachment, methods=["GET"], tags=["db"])
 
 
 # legacy supports
