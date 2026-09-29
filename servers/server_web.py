@@ -340,17 +340,17 @@ app.add_api_route("/db/{db_name}/{doc_id}", db_get, methods=["GET"], tags=["db"]
 app.add_api_route("/db/{db_name}/{doc_id}/{attachment_name}",
                   db_get_attachment, methods=["GET"], tags=["db"])
 
-def db_add_arm_result(db_name: DBName, doc_id: str, run_id:str,data:dict):
+def db_add_arm(db_name: DBName, doc_id: str, run_id:str, data:dict, kind:str="arm_result"):
     db = get_db(db_name)
     doc = db.get(doc_id)
     if doc is None:return not_found()    
-    path = Path(db.root)/Path(doc_id.replace(":","/"))/"arm"/run_id/f"{run_id}_arm_result.json"
+    path = Path(db.root)/Path(doc_id.replace(":","/"))/"arm"/f"{run_id}_{kind}.json"
     path.parent.mkdir(parents=True,exist_ok=True)
     path.write_text(json.dumps(data))
     return path
 
-app.add_api_route("/db_record/{db_name}/{doc_id}/add_arm_result",
-                  db_add_arm_result, methods=["POST"], tags=["db"])
+app.add_api_route("/db_record/{db_name}/{doc_id}/add_arm",
+                  db_add_arm, methods=["POST"], tags=["db"])
 
 
 # legacy supports
