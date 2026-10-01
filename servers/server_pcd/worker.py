@@ -644,11 +644,12 @@ class PcdWorker(
         if output_json_path is not None:
             write_json_atomic(output_json_path, result, job_id)
         LOG.info(
-            'PCD job %s succeeded: %d points, %d segments, %.1f ms',
-            job_id,
-            result.point_count,
-            result.num_segments,
-            result.timing.total_ms,
+            'PCD OK: {:.1f}ms, {} pts, {} segs, job(id={}) '.format(
+                result.timing.total_ms,
+                result.point_count,
+                result.num_segments,
+                job_id,
+            )
         )
         return result
 
