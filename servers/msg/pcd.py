@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 from npb_rpc import RpcEvent
 from npb_rpc.utils import api, build_client_class
 
-from servers.msg.job import JobState, JobResultResponse, JobSubmitResponseBase
+from servers.msg.job import JobRequest, JobSnapshot, JobState, JobResultResponse, JobSubmitResponse
 
 
 # Common
@@ -148,30 +148,6 @@ class PcdBuildResult(PcdBuildRequest):
     timing: PcdTiming = Field(default_factory=PcdTiming)
 
 
-# Async jobs
-
-@binary_schema("npb-rpc.pcd.build.submit.response", version=2)
-class PcdBuildSubmitResponse(JobSubmitResponseBase):
-    """Returned immediately after a PCD build job is accepted."""
-
-    rgb_jpg_path: str = ""
-    left_jpg_path: str = ""
-    right_jpg_path: str = ""
-    output_pcd_path: str = ""
-    output_json_path: str | None = None
-
-    # Keep error after the service-specific echo fields to preserve the
-    # existing fixed wire field ordering.
-    error: str = ""
-
-
-@binary_schema("npb-rpc.pcd.job.request", version=1)
-class PcdJobRequest(BinaryModel):
-    """Identify one asynchronous PCD job."""
-
-    job_id: str = Field(min_length=1)
-
-
 @binary_schema("npb-rpc.pcd.job.status.response", version=1)
 class PcdJobStatusResponse(BinaryModel):
     """Lightweight state for one asynchronous PCD build job."""
@@ -199,13 +175,6 @@ class PcdJobStatusResponse(BinaryModel):
     num_segments: int | None = None
     timing: PcdTiming = Field(default_factory=PcdTiming)
     error: str = ""
-
-
-@binary_schema("npb-rpc.pcd.job.result.response", version=1)
-class PcdJobResultResponse(JobResultResponse[PcdBuildResult]):
-    """Full result of one asynchronous PCD build job."""
-
-    pass
 
 
 # Server status
@@ -240,13 +209,13 @@ class PcdInterface(Protocol):
     service = "pcd"
 
     @api("pcd.build", "POST", "build")
-    def build(self, request: PcdBuildRequest) -> PcdBuildSubmitResponse: ...
+    def build(self, request: PcdBuildRequest) -> JobSubmitResponse: ...
 
     @api("pcd.job_status", "GET", "job_status")
-    def job_status(self, request: PcdJobRequest) -> PcdJobStatusResponse: ...
+    def job_status(self, request: JobRequest) -> JobSnapshot[PcdBuildRequest, PcdBuildResult]: ...
 
     @api("pcd.job_result", "GET", "job_result")
-    def job_result(self, request: PcdJobRequest) -> PcdJobResultResponse: ...
+    def job_result(self, request: JobRequest) -> JobResultResponse[PcdBuildResult]: ...
 
     @api("pcd.status", "GET", "status")
     def status(self, request: EmptyRequest) -> PcdStatusResponse: ...

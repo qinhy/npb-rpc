@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from servers.msg.job import JobResultResponse
+
 """Unified RPC + HTTP interface for the YOLO service."""
 
 from servers.logger import logging
@@ -8,12 +10,12 @@ from typing import Any
 from npb_rpc.utils import add_fastapi_routes
 
 from servers.msg.yolo import (
+    YoloDetectResult,
     YoloInterface,
     EmptyRequest,
     YoloInferenceRequest,
-    YoloInferenceSubmitResponse,
-    YoloJobRequest,
-    YoloJobResultResponse,
+    JobSubmitResponse,
+    JobRequest,
     YoloJobStatusResponse,
     YoloStatusResponse,
 )
@@ -37,28 +39,40 @@ class YoloService(YoloInterface):
     def inference(
         self,
         request: YoloInferenceRequest,
-    ) -> YoloInferenceSubmitResponse:
+    ) -> JobSubmitResponse:
         """Queue inference and return immediately with a job id."""
         try:
-            res = self.worker.submit(request)
+            return self.worker.submit(request)
         except Exception as exc:
             self.log.exception("yolo.inference failed")
-            res = YoloInferenceSubmitResponse(
+            return JobSubmitResponse(
                 accepted=False,
-                input_jpg_path=request.input_jpg_path,
-                output_json_path=request.output_json_path,
                 error=f"inference submit error: {type(exc).__name__}: {exc}",
             )
-        res.done_event=request.done_event
-        return res
 
     def job_status(
         self,
-        request: YoloJobRequest,
+        request: JobRequest,
     ) -> YoloJobStatusResponse:
         """Return lightweight state for one asynchronous inference job."""
         try:
-            return self.worker.job_status(request.job_id)
+            snapshot = self.worker.job_status(request.job_id)
+            res = YoloJobStatusResponse(
+                found=True,
+                job_id=request.job_id,
+                state=snapshot.state,
+                model_name=snapshot.request.model_name,
+                cuda_device=snapshot.request.cuda_device,
+                input_jpg_path=snapshot.request.input_jpg_path,
+                output_json_path=snapshot.request.output_json_path,
+                created_ns=snapshot.created_ns,
+                started_ns=snapshot.started_ns,
+                finished_ns=snapshot.finished_ns,
+                cache_hit=snapshot.cache_hit,
+                num_detections=snapshot.result.num_detections,
+                timing=snapshot.result.timing,
+                error=snapshot.error,
+            )
         except Exception as exc:
             self.log.exception("yolo.job_status failed")
             return YoloJobStatusResponse(
@@ -66,17 +80,18 @@ class YoloService(YoloInterface):
                 job_id=request.job_id,
                 error=f"job status error: {type(exc).__name__}: {exc}",
             )
-
+        return res
+    
     def job_result(
         self,
-        request: YoloJobRequest,
-    ) -> YoloJobResultResponse:
+        request: JobRequest,
+    ) -> JobResultResponse[YoloDetectResult]:
         """Return the full result when a job has succeeded."""
         try:
             return self.worker.job_result(request.job_id)
         except Exception as exc:
             self.log.exception("yolo.job_result failed")
-            return YoloJobResultResponse(
+            return JobResultResponse[YoloDetectResult](
                 found=False,
                 job_id=request.job_id,
                 error=f"job result error: {type(exc).__name__}: {exc}",

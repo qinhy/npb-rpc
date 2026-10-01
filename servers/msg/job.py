@@ -4,9 +4,11 @@ from enum import StrEnum
 from typing import Generic, TypeVar
 
 from npb import BinaryModel
+from pydantic import Field
 from npb_rpc import RpcEvent
 
 
+RequestT = TypeVar("RequestT")
 ResultT = TypeVar("ResultT")
 
 
@@ -20,7 +22,12 @@ class JobState(StrEnum):
     CANCELLED = "cancelled"
 
 
-class JobSubmitResponseBase(BinaryModel):
+class JobRequest(BinaryModel):
+    """Identify one asynchronous job."""
+    job_id: str = Field(min_length=1)
+
+
+class JobSubmitResponse(BinaryModel):
     """Common wire prefix for asynchronous job submission responses.
 
     Service-specific subclasses append their own useful echo fields and keep
@@ -32,6 +39,7 @@ class JobSubmitResponseBase(BinaryModel):
     job_id: str = ""
     state: JobState | None = None
     done_event: RpcEvent | None = None
+    error: str | None = None
 
 
 class JobResultResponse(BinaryModel, Generic[ResultT]):
@@ -42,7 +50,7 @@ class JobResultResponse(BinaryModel, Generic[ResultT]):
     schema id/version, for example::
 
         @binary_schema("npb-rpc.yolo.job.result.response", version=1)
-        class YoloJobResultResponse(JobResultResponse[YoloDetectResult]):
+        class JobResultResponse[YoloDetectResult](JobResultResponse[YoloDetectResult]):
             pass
 
     This keeps the service-specific RPC contract/name while defining the
@@ -54,3 +62,47 @@ class JobResultResponse(BinaryModel, Generic[ResultT]):
     state: JobState | None = None
     result: ResultT | None = None
     error: str = ""
+
+
+class JobRecord(BinaryModel, Generic[RequestT, ResultT]):
+    request: RequestT
+
+    state: JobState = "queued"
+
+    created_ns: int = 0
+    started_ns: int = 0
+    finished_ns: int = 0
+
+    cache_hit: bool = False
+
+    result: ResultT | None = None
+    error: str = ""
+
+
+class JobSnapshot(BinaryModel, Generic[RequestT, ResultT]):
+    job_id: str = ""
+    request: RequestT | None
+
+    state: JobState = JobState.FAILED
+
+    created_ns: int = -1
+    started_ns: int = -1
+    finished_ns: int = -1
+
+    cache_hit: bool = False
+
+    result: ResultT | None
+    error: str = ""
+
+
+class JobStoreSummary(BinaryModel):
+    queued_jobs: int = -1
+    running_jobs: int = -1
+
+    succeeded_jobs: int = -1
+    failed_jobs: int = -1
+    cancelled_jobs: int = -1
+
+    last_job_id: str = ""
+    last_finished_ns: int = -1
+    last_error: str = ""

@@ -18,12 +18,7 @@ from servers.msg.pcd import (
     PcdBackend,
     PcdBuildRequest,
     PcdBuildResult,
-    PcdBuildSubmitResponse,
-    PcdJobResultResponse,
-    PcdJobState,
-    PcdJobStatusResponse,
     PcdSegment,
-    PcdStatusResponse,
     PcdTiming,
 )
 from servers.server_pcd.disparity_predictors import (
@@ -44,7 +39,7 @@ from servers.server_pcd.pcd_calculation import (
     save_pcd,
     split_cloud_uv,
 )
-from servers.worker.store import JobStore
+from servers.msg.worker import Worker, JobStore
 
 
 LOG = logging.getLogger(__name__.replace(".",":"))
@@ -553,232 +548,52 @@ class PcdCalculator:
 
 # --- Worker façade ---
 
-class PcdWorker:
-    """
-    Asynchronous PCD worker pool.
-
-    RPC threads only call:
-
-        submit()
-        job_status()
-        job_result()
-        status()
-
-    Stereo/disparity/PCD work happens in worker threads.
-    """
-
+class PcdWorker(
+    Worker[PcdBuildRequest, PcdBuildResult]
+):
     def __init__(
         self,
         *,
-        worker_count: int=1,
-        queue_size: int=0,
-        job_ttl_s: float=3600.0,
-        max_completed_jobs: int=128,
-        read_root: str | Path | None=None,
-        write_root: str | Path | None=None,
-        backend_options: Mapping[str, Mapping[str, Any]] | None=None,
-        calibration_translation_unit: str='cm',
+        worker_count: int = 1,
+        queue_size: int = 0,
+        job_ttl_s: float = 3600.0,
+        max_completed_jobs: int = 128,
+        read_root: str | Path | None = None,
+        write_root: str | Path | None = None,
+        backend_options=None,
+        calibration_translation_unit: str = "cm",
     ) -> None:
-        self.worker_count = max(1, int(worker_count))
-        self.store = JobStore[PcdBuildRequest, PcdBuildResult](job_ttl_s=job_ttl_s, max_completed_jobs=max_completed_jobs)
-        self.backends = PcdBackendCache(backend_options=backend_options)
+
+        super().__init__(
+            name="pcd",
+            worker_count=worker_count,
+            queue_size=queue_size,
+            job_ttl_s=job_ttl_s,
+            max_completed_jobs=max_completed_jobs,
+        )
+
+        self.backends = PcdBackendCache(
+            backend_options=backend_options
+        )
+
         self.calibrations = PcdCalibrationCache(
             source_translation_unit=calibration_translation_unit
         )
-        self.calculator = PcdCalculator(calibrations=self.calibrations)
-        self._queue: Queue[str] = Queue(maxsize=max(0, int(queue_size)))
-        self._state_lock = threading.RLock()
-        self._shutdown = threading.Event()
-        self._threads: list[threading.Thread] = []
-        self._started = False
-        self._closed = False
+
+        self.calculator = PcdCalculator(
+            calibrations=self.calibrations
+        )
+
         self._read_root = normalize_root(read_root)
         self._write_root = normalize_root(write_root)
 
-    def start(self) -> None:
-        with self._state_lock:
-            if self._closed:
-                raise RuntimeError('PCD worker is closed')
-            if self._started:
-                return
-            self._shutdown.clear()
-            self._started = True
-            for index in range(self.worker_count):
-                thread = threading.Thread(
-                    target=self._worker_loop,
-                    name=f'pcd-worker-{index}',
-                    daemon=True,
-                )
-                self._threads.append(thread)
-                thread.start()
-        LOG.info('started %d PCD worker thread(s)', self.worker_count)
-
-    def close(self, *, timeout_s: float=10.0) -> None:
-        """
-        Stop accepting new work, drain already queued jobs, and
-        terminate worker threads.
-
-        Unlike sentinel-based shutdown, this does not perform a
-        blocking Queue.put() during close(), so timeout_s remains
-        meaningful even for bounded queues.
-        """
-        with self._state_lock:
-            self._closed = True
-            self._shutdown.set()
-            threads = list(self._threads)
-            started = self._started
-        if not started:
-            self.backends.clear()
-            self.calibrations.clear()
-            return
-        deadline = time.monotonic() + max(0.0, timeout_s)
-        for thread in threads:
-            thread.join(max(0.0, deadline - time.monotonic()))
-        alive = [thread.name for thread in threads if thread.is_alive()]
-        if alive:
-            LOG.warning('PCD workers still running after shutdown timeout: %s', alive)
-            return
-        self.backends.clear()
-        self.calibrations.clear()
-        with self._state_lock:
-            self._started = False
-
-    def submit(self, request: PcdBuildRequest) -> PcdBuildSubmitResponse:
-        """
-        Queue one build.
-
-        The worker-state check and queue insertion are protected by
-        the same lock as close(), preventing a job from being queued
-        after shutdown begins.
-        """
-        with self._state_lock:
-            if not self._started or self._closed:
-                return PcdBuildSubmitResponse(
-                    accepted=False,
-                    rgb_jpg_path=request.rgb_jpg_path,
-                    left_jpg_path=request.left_jpg_path,
-                    right_jpg_path=request.right_jpg_path,
-                    output_pcd_path=request.output_pcd_path,
-                    output_json_path=request.output_json_path,
-                    error='PCD worker is not running',
-                )
-            job_id = self.store.create(request)
-            try:
-                self._queue.put_nowait(job_id)
-            except Full:
-                self.store.discard_queued(job_id)
-                return PcdBuildSubmitResponse(
-                    accepted=False,
-                    rgb_jpg_path=request.rgb_jpg_path,
-                    left_jpg_path=request.left_jpg_path,
-                    right_jpg_path=request.right_jpg_path,
-                    output_pcd_path=request.output_pcd_path,
-                    output_json_path=request.output_json_path,
-                    error='PCD worker queue is full',
-                )
-        return PcdBuildSubmitResponse(
-            accepted=True,
-            job_id=job_id,
-            state='queued',
-            rgb_jpg_path=request.rgb_jpg_path,
-            left_jpg_path=request.left_jpg_path,
-            right_jpg_path=request.right_jpg_path,
-            output_pcd_path=request.output_pcd_path,
-            output_json_path=request.output_json_path,
-        )
-
-    def cancel(self, job_id: str) -> bool:
-        """
-        Cancel a queued job.
-
-        A cancelled job may still physically remain in Queue; when
-        a worker reaches it, mark_running() fails and the item is
-        discarded safely.
-        """
-        return self.store.cancel(job_id)
-
-    def job_status(self, job_id: str) -> PcdJobStatusResponse:
-        snapshot = self.store.snapshot(job_id)
-        if snapshot is None:
-            return PcdJobStatusResponse(
-                found=False,
-                job_id=job_id,
-                error='job not found or expired',
-            )
-        request = snapshot.request
-        return PcdJobStatusResponse(
-            found=True,
-            job_id=job_id,
-            state=snapshot.state,
-            backend=request.backend,
-            cuda_device=request.cuda_device,
-            rgb_jpg_path=request.rgb_jpg_path,
-            left_jpg_path=request.left_jpg_path,
-            right_jpg_path=request.right_jpg_path,
-            output_pcd_path=request.output_pcd_path,
-            output_json_path=request.output_json_path,
-            created_ns=snapshot.created_ns,
-            started_ns=snapshot.started_ns,
-            finished_ns=snapshot.finished_ns,
-            cache_hit=snapshot.cache_hit,
-            point_count=snapshot.result.point_count,
-            num_segments=snapshot.result.num_segments,
-            timing=snapshot.result.timing,
-            error=snapshot.error,
-        )
-
-    def job_result(self, job_id: str) -> PcdJobResultResponse:
-        snapshot = self.store.snapshot(job_id)
-        if snapshot is None:
-            return PcdJobResultResponse(
-                found=False,
-                job_id=job_id,
-                error='job not found or expired',
-            )
-        return PcdJobResultResponse(
-            found=True,
-            job_id=job_id,
-            state=snapshot.state,
-            result=snapshot.result if snapshot.state == 'succeeded' else None,
-            error=snapshot.error,
-        )
-
-    def status(self) -> PcdStatusResponse:
-        jobs = self.store.summary()
-        cached_backends, cache_hits, cache_misses = self.backends.snapshot()
-        with self._state_lock:
-            online = self._started and (not self._closed)
-        return PcdStatusResponse(
-            online=online,
-            queued_jobs=jobs.queued_jobs,
-            running_jobs=jobs.running_jobs,
-            succeeded_jobs=jobs.succeeded_jobs,
-            failed_jobs=jobs.failed_jobs,
-            cancelled_jobs=jobs.cancelled_jobs,
-            # build_count=jobs.build_count,
-            cache_hits=cache_hits,
-            cache_misses=cache_misses,
-            cached_backends=cached_backends,
-            last_job_id=jobs.last_job_id,
-            # last_build_ns=jobs.last_build_ns,
-            # last_build_ms=jobs.last_build_ms,
-            error=jobs.last_error,
-        )
-
-    def _worker_loop(self) -> None:
-        while True:
-            try:
-                job_id = self._queue.get(timeout=0.1)
-            except Empty:
-                if self._shutdown.is_set():
-                    return
-                continue
-            try:
-                self._run_job(job_id)
-            finally:
-                self._queue.task_done()
-
-    def _run_job(self, job_id: str) -> None:
+    def process(
+        self,
+        *,
+        request: PcdBuildRequest,
+        job_id: str,
+    ) -> PcdBuildResult:
+        
         snapshot = self.store.snapshot(job_id)
         if snapshot is None or snapshot.state != 'queued' or (not self.store.mark_running(job_id)):
             return
@@ -843,6 +658,21 @@ class PcdWorker:
 
         finally:
             if request.done_event:request.done_event.set()
+
+    def on_finished(
+        self,
+        *,
+        request: PcdBuildRequest,
+        job_id: str,
+    ) -> None:
+
+        if request.done_event:
+            request.done_event.set()
+
+    def cleanup(self) -> None:
+        self.backends.clear()
+        self.calibrations.clear()
+
 
     def _resolve_image_path(self, value: str) -> Path:
         path = resolve_path(value, self._read_root)

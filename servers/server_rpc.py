@@ -18,8 +18,9 @@ from servers.msg.dai import (
     CameraFrameSetRequest,
     CameraInterface, CameraClient
 )
-from servers.msg.yolo import YoloInferenceRequest, YoloJobRequest, YoloInterface, YoloClient
-from servers.msg.pcd import PcdBuildRequest, PcdJobRequest, PcdInterface, PcdClient, PcdBackend
+from servers.msg.job import JobRequest
+from servers.msg.yolo import YoloInferenceRequest, YoloInterface, YoloClient
+from servers.msg.pcd import PcdBuildRequest, PcdInterface, PcdClient, PcdBackend
 
 from servers.store.custom_record_store import CustomStore, PCDRecord
 from servers.logger import logging
@@ -203,7 +204,7 @@ def capture_cams(store:CustomStore=STORE,
             with console.status(f"[cyan]YOLO[/] {camera_id}", spinner="dots"):
                 yolo_res.done_event.wait()
             yolo_res.done_event.delete()
-            yolo_res = cam.yolo.job_status(YoloJobRequest(job_id=yolo_res.job_id))
+            yolo_res = cam.yolo.job_status(JobRequest(job_id=yolo_res.job_id))
             rprint("YOLO", f"{camera_id} | {yolo_res.state}",
                     "green" if yolo_res.state == "succeeded" else "red")
 
@@ -223,7 +224,7 @@ def capture_cams(store:CustomStore=STORE,
             with console.status(f"[cyan]PCD[/]  {camera_id}", spinner="dots"):
                 pcd_res.done_event.wait()
             pcd_res.done_event.delete()
-            pcd_res = cam.pcd.job_status(PcdJobRequest(job_id=pcd_res.job_id))
+            pcd_res = cam.pcd.job_status(JobRequest(job_id=pcd_res.job_id))
             rprint("PCD", f"{camera_id} | {pcd_res.state}",
                     "green" if pcd_res.state == "succeeded" else "red")
 

@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from npb_rpc.utils import resolve_service_instance
+from servers.msg.job import JobResultResponse
 
 try:
     import zmq
@@ -14,8 +15,8 @@ except ImportError:  # Only needed for ZeroMQ IPC capability detection.
 
 from npb_rpc import RedisDiscovery, portable_ipc, portable_tcp
 
-from servers.msg.yolo import YoloClient, YoloInterface
-from servers.msg.yolo import EmptyRequest, YoloInferenceRequest, YoloJobRequest, YoloStatusResponse, YoloJobStatusResponse, YoloJobResultResponse
+from servers.msg.yolo import YoloClient, YoloDetectResult, YoloInterface
+from servers.msg.yolo import EmptyRequest, YoloInferenceRequest, JobRequest, YoloStatusResponse, YoloJobStatusResponse
 from servers.server_yolo.server import run_server
 
 
@@ -88,7 +89,7 @@ def print_job_status(status:YoloJobStatusResponse) -> None:
     )
 
 
-def print_job_result(response:YoloJobResultResponse, *, full: bool = False) -> None:
+def print_job_result(response:JobResultResponse[YoloDetectResult], *, full: bool = False) -> None:
     if not response.found:
         print(f"job not found: {response.job_id!r}; error={response.error!r}")
         return
@@ -157,7 +158,7 @@ def wait_for_job(client: YoloInterface, job_id: str, poll_interval: float, *, fu
     last_state = None
 
     while True:
-        status = client.job_status(YoloJobRequest(job_id=job_id))
+        status = client.job_status(JobRequest(job_id=job_id))
         if not status.found:
             print_job_status(status)
             return
@@ -173,7 +174,7 @@ def wait_for_job(client: YoloInterface, job_id: str, poll_interval: float, *, fu
 
     if status.state == "succeeded":
         print_job_result(
-            client.job_result(YoloJobRequest(job_id=job_id)),
+            client.job_result(JobRequest(job_id=job_id)),
             full=full_result,
         )
 
@@ -183,12 +184,12 @@ def run_client(args: argparse.Namespace, discovery: RedisDiscovery) -> None:
     print_connection(args, discovery)
 
     if args.job_status:
-        print_job_status(client.job_status(YoloJobRequest(job_id=args.job_status)))
+        print_job_status(client.job_status(JobRequest(job_id=args.job_status)))
         return
 
     if args.job_result:
         print_job_result(
-            client.job_result(YoloJobRequest(job_id=args.job_result)),
+            client.job_result(JobRequest(job_id=args.job_result)),
             full=args.print_result,
         )
         return

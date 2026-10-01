@@ -14,12 +14,11 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from servers.msg.job import JobResultResponse
 from servers.msg.yolo import (
     YoloDetectResult,
     YoloInferenceRequest,
-    YoloInferenceSubmitResponse,
-    YoloJobResultResponse,
-    YoloJobState,
+    JobSubmitResponse,
     YoloJobStatusResponse,
     YoloStatusResponse,
     YoloTiming,
@@ -41,7 +40,8 @@ from servers.server_yolo.yolo_utils import (
     yolo_device,
 )
 
-from servers.worker.store import JobStore
+from servers.msg.worker import JobStore
+from servers.msg.worker import Worker
 
 LOG = logging.getLogger(__name__.replace(".",":"))
 
@@ -440,10 +440,10 @@ class YoloWorker:
         else:
             self.models.clear()
 
-    def submit(self, request: YoloInferenceRequest) -> YoloInferenceSubmitResponse:
+    def submit(self, request: YoloInferenceRequest) -> JobSubmitResponse:
         with self._state_lock:
             if not self._started or self._closed:
-                return YoloInferenceSubmitResponse(
+                return JobSubmitResponse(
                     accepted=False,
                     input_jpg_path=request.input_jpg_path,
                     output_json_path=request.output_json_path,
@@ -455,14 +455,14 @@ class YoloWorker:
             self._queue.put_nowait(job_id)
         except Exception as exc:
             self.store.fail(job_id, f"failed to queue job: {exc}")
-            return YoloInferenceSubmitResponse(
+            return JobSubmitResponse(
                 accepted=False,
                 input_jpg_path=request.input_jpg_path,
                 output_json_path=request.output_json_path,
                 error=f"failed to queue job: {exc}",
             )
 
-        return YoloInferenceSubmitResponse(
+        return JobSubmitResponse(
             accepted=True,
             job_id=job_id,
             state="queued",
@@ -492,12 +492,12 @@ class YoloWorker:
             error=snapshot.error,
         )
 
-    def job_result(self, job_id: str) -> YoloJobResultResponse:
+    def job_result(self, job_id: str) -> JobResultResponse[YoloDetectResult]:
         snapshot = self.store.snapshot(job_id)
         if snapshot is None:
-            return YoloJobResultResponse(found=False, job_id=job_id, error="job not found or expired")
+            return JobResultResponse[YoloDetectResult](found=False, job_id=job_id, error="job not found or expired")
 
-        return YoloJobResultResponse(
+        return JobResultResponse[YoloDetectResult](
             found=True,
             job_id=job_id,
             state=snapshot.state,
@@ -580,4 +580,116 @@ class YoloWorker:
         if path.suffix.lower() != ".json":
             raise ValueError(f"output path must end in .json: {path}")
         path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+
+class YoloWorker(
+    Worker[YoloInferenceRequest, YoloDetectResult]
+):
+    def __init__(
+        self,
+        *,
+        worker_count: int = 1,
+        queue_size: int = 0,
+        job_ttl_s: float = 3600.0,
+        max_completed_jobs: int = 128,
+        read_root: str | Path | None = None,
+        write_root: str | Path | None = None,
+    ) -> None:
+
+        super().__init__(
+            name="yolo",
+            worker_count=worker_count,
+            queue_size=queue_size,
+            job_ttl_s=job_ttl_s,
+            max_completed_jobs=max_completed_jobs,
+        )
+
+        self.models = YoloModelCache()
+        self.detector = UltralyticsYoloDetector()
+
+        self._read_root = normalize_root(read_root)
+        self._write_root = normalize_root(write_root)
+
+    def process(
+        self,
+        *,
+        request: YoloInferenceRequest,
+        job_id: str,
+    ) -> YoloDetectResult:
+
+        input_path = self._resolve_input_path(
+            request.input_jpg_path
+        )
+
+        output_path = self._resolve_output_path(
+            request.output_json_path
+        )
+
+        with self.models.acquire(
+            request.model_name,
+            request.cuda_device,
+        ) as (entry, cache_hit):
+
+            self.store.set_cache_hit(
+                job_id,
+                cache_hit,
+            )
+
+            result = self.detector.detect(
+                entry.model,
+                entry.task,
+                request,
+                input_path,
+            )
+
+        write_json_atomic(
+            output_path,
+            result,
+            job_id,
+        )
+
+        return result
+
+    def on_finished(
+        self,
+        *,
+        request: YoloInferenceRequest,
+        job_id: str,
+    ) -> None:
+
+        if request.done_event:
+            request.done_event.set()
+
+    def cleanup(self) -> None:
+        self.models.clear()
+
+    def _resolve_input_path(self, value: str) -> Path:
+        path = resolve_path(value, self._read_root)
+
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"input JPEG not found: {path}"
+            )
+
+        if path.suffix.lower() not in {".jpg", ".jpeg"}:
+            raise ValueError(
+                f"input path must end in .jpg or .jpeg: {path}"
+            )
+
+        return path
+
+    def _resolve_output_path(self, value: str) -> Path:
+        path = resolve_path(value, self._write_root)
+
+        if path.suffix.lower() != ".json":
+            raise ValueError(
+                f"output path must end in .json: {path}"
+            )
+
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
         return path

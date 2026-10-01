@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 from npb_rpc import RpcEvent
 from npb_rpc.utils import api, build_client_class
 
-from servers.msg.job import JobState, JobResultResponse, JobSubmitResponseBase
+from servers.msg.job import JobRequest, JobSnapshot, JobState, JobResultResponse, JobSubmitResponse
 
 
 # ============================================================
@@ -212,35 +212,6 @@ class YoloDetectResult(YoloInferenceRequest):
 
 
 # ============================================================
-# Async Job Submission
-# ============================================================
-
-
-@binary_schema("npb-rpc.yolo.inference.submit.response", version=2)
-class YoloInferenceSubmitResponse(JobSubmitResponseBase):
-    """Returned immediately after an inference job is accepted."""
-
-    input_jpg_path: str = ""
-    output_json_path: str = ""
-
-    # Keep error after the service-specific echo fields to preserve the
-    # existing fixed wire field ordering.
-    error: str = ""
-
-
-# ============================================================
-# Async Job Request
-# ============================================================
-
-
-@binary_schema("npb-rpc.yolo.job.request", version=1)
-class YoloJobRequest(BinaryModel):
-    """Identify one asynchronous YOLO job."""
-
-    job_id: str = Field(min_length=1)
-
-
-# ============================================================
 # Async Job Status
 # ============================================================
 
@@ -275,18 +246,6 @@ class YoloJobStatusResponse(BinaryModel):
     timing: YoloTiming = Field(default_factory=YoloTiming)
 
     error: str = ""
-
-
-# ============================================================
-# Async Job Result
-# ============================================================
-
-
-@binary_schema("npb-rpc.yolo.job.result.response", version=1)
-class YoloJobResultResponse(JobResultResponse[YoloDetectResult]):
-    """Full result of one asynchronous inference job."""
-
-    pass
 
 
 # ============================================================
@@ -334,14 +293,14 @@ class YoloInterface(Protocol):
     service = "yolo"
 
     @api("yolo.inference", "POST", "inference")
-    def inference(self,request: YoloInferenceRequest)->YoloInferenceSubmitResponse:
+    def inference(self,request: YoloInferenceRequest)->JobSubmitResponse:
         ...    
     @api("yolo.job_status", "GET", "job_status")
-    def job_status(self,request: YoloJobRequest)->YoloJobStatusResponse:
+    def job_status(self,request: JobRequest)->JobSnapshot[YoloInferenceRequest, YoloDetectResult]:
         ...    
     @api("yolo.job_result", "GET", "job_result")
-    def job_result(self,request: YoloJobRequest)->YoloJobResultResponse:
-        ...    
+    def job_result(self,request: JobRequest)->JobResultResponse[YoloDetectResult]:
+        ... 
     @api("yolo.status", "GET", "status")
     def status(self,request: EmptyRequest)->YoloStatusResponse:
         ...    

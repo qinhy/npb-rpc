@@ -17,13 +17,13 @@ from npb_rpc import RedisDiscovery
 from npb_rpc._event import RpcEvent
 from servers.msg.dai import CameraFrameSetRequest, CameraInterface
 from servers.server_dai.interface import add_camera_routes
-from servers.msg.yolo import YoloClient, YoloInferenceRequest, YoloInterface, YoloJobRequest, EmptyRequest
+from servers.msg.yolo import YoloClient, YoloInferenceRequest, YoloInterface, JobRequest, EmptyRequest
 from servers.server_rpc import (STORE, CameraPipelineConfig, RGBD_hand, RGBD_left, RGBD_right, console,
                                 close_cams, close_rgbd_hand, close_rgbd_left, close_rgbd_right,
                                 open_dual_rgb, open_hand, open_rgbd_hand, open_rgbd_left, open_rgbd_right, rprint,
                                 status_rgbd_hand, status_rgbd_left, status_rgbd_right)
 from servers.server_yolo.interface import add_yolo_routes
-from servers.msg.pcd import PcdBuildRequest, PcdInterface, PcdJobRequest
+from servers.msg.pcd import PcdBuildRequest, PcdInterface
 from servers.server_pcd.interface import add_pcd_routes
 from servers.store.custom_record_store import CustomStore, PCDRecord
 from servers.store.fs_nosql import FileSystemDB
@@ -100,7 +100,7 @@ def refresh():
 def last_ai_record()->List[Dict]:
     yolo:YoloInterface = YoloClient(discovery=RedisDiscovery(),server_name="yolo")
     yolo_st = yolo.status(EmptyRequest())
-    yolo_rec = yolo.job_result(YoloJobRequest(job_id=yolo_st.last_job_id))
+    yolo_rec = yolo.job_result(JobRequest(job_id=yolo_st.last_job_id))
     return [json.loads(yolo_rec.result.model_dump_json())]
 
 
@@ -219,7 +219,7 @@ def capture_cams(store:CustomStore=STORE,
             with console.status(f"[cyan]YOLO[/] {camera_id}", spinner="dots"):
                 yolo_res.done_event.wait()
             yolo_res.done_event.delete()
-            yolo_res = cam.yolo.job_status(YoloJobRequest(job_id=yolo_res.job_id))
+            yolo_res = cam.yolo.job_status(JobRequest(job_id=yolo_res.job_id))
             rprint("YOLO", f"{camera_id} | {yolo_res.state}",
                     "green" if yolo_res.state == "succeeded" else "red")
 
@@ -239,7 +239,7 @@ def capture_cams(store:CustomStore=STORE,
             with console.status(f"[cyan]PCD[/]  {camera_id}", spinner="dots"):
                 pcd_res.done_event.wait()
             pcd_res.done_event.delete()
-            pcd_res = cam.pcd.job_status(PcdJobRequest(job_id=pcd_res.job_id))
+            pcd_res = cam.pcd.job_status(JobRequest(job_id=pcd_res.job_id))
             rprint("PCD", f"{camera_id} | {pcd_res.state}",
                     "green" if pcd_res.state == "succeeded" else "red")
         else:            

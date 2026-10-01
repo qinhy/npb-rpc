@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from servers.msg.job import JobResultResponse, JobSnapshot, JobStoreSummary
+
 """Unified RPC + HTTP interface for the PCD service."""
 
 from servers.logger import logging
@@ -8,14 +10,12 @@ from typing import Any
 from npb_rpc.utils import add_fastapi_routes
 
 from servers.msg.pcd import (
+    PcdBuildResult,
     PcdInterface,
     EmptyRequest,
     PcdBuildRequest,
-    PcdBuildSubmitResponse,
-    PcdJobRequest,
-    PcdJobResultResponse,
-    PcdJobStatusResponse,
-    PcdStatusResponse,
+    JobSubmitResponse,
+    JobRequest
 )
 from servers.server_pcd.worker import PcdWorker
 
@@ -34,12 +34,12 @@ class PcdService(PcdInterface):
         self.worker = worker
         self.log = logger or LOG
 
-    def build(self, request: PcdBuildRequest) -> PcdBuildSubmitResponse:
+    def build(self, request: PcdBuildRequest) -> JobSubmitResponse:
         try:
             res = self.worker.submit(request)
         except Exception as exc:
             self.log.exception("pcd.build failed")
-            res = PcdBuildSubmitResponse(
+            res = JobSubmitResponse(
                 accepted=False,
                 rgb_jpg_path=request.rgb_jpg_path,
                 left_jpg_path=request.left_jpg_path,
@@ -51,35 +51,35 @@ class PcdService(PcdInterface):
         res.done_event=request.done_event
         return res
 
-    def job_status(self, request: PcdJobRequest) -> PcdJobStatusResponse:
+    def job_status(self, request: JobRequest) -> JobSnapshot[PcdBuildRequest, PcdBuildResult]:
         try:
             return self.worker.job_status(request.job_id)
         except Exception as exc:
             self.log.exception("pcd.job_status failed")
-            return PcdJobStatusResponse(
+            return JobSnapshot[PcdBuildRequest, PcdBuildResult](
                 found=False,
                 job_id=request.job_id,
                 error=f"job status error: {type(exc).__name__}: {exc}",
             )
 
-    def job_result(self, request: PcdJobRequest) -> PcdJobResultResponse:
+    def job_result(self, request: JobRequest) -> JobResultResponse[PcdBuildResult]:
         try:
             return self.worker.job_result(request.job_id)
         except Exception as exc:
             self.log.exception("pcd.job_result failed")
-            return PcdJobResultResponse(
+            return JobResultResponse[PcdBuildResult](
                 found=False,
                 job_id=request.job_id,
                 error=f"job result error: {type(exc).__name__}: {exc}",
             )
 
-    def status(self, request: EmptyRequest) -> PcdStatusResponse:
+    def status(self, request: EmptyRequest) -> JobStoreSummary:
         del request
         try:
             return self.worker.status()
         except Exception as exc:
             self.log.exception("pcd.status failed")
-            return PcdStatusResponse(
+            return JobStoreSummary(
                 online=False,
                 error=f"status error: {type(exc).__name__}: {exc}",
             )
