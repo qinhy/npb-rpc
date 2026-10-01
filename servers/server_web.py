@@ -115,11 +115,10 @@ def debug_get_file(path: str):
 
 
 def debug_yolo():
-    return FileResponse(
-        "yolo_debug.html",
-        media_type="text/html",
-    )
+    return FileResponse("yolo_debug.html",media_type="text/html")
 
+def debug_cams():
+    return FileResponse("cams_debug.html",media_type="text/html")
 
 GLOBAL_yolo_config = YoloInferenceRequest(
     model_name="yolo11l-seg.pt",
@@ -276,6 +275,8 @@ app.add_api_route("/debug/get_file",
 
 app.add_api_route("/debug/yolo",
     debug_yolo,methods=["GET"],tags=["debug"],)
+app.add_api_route("/debug/cams",
+    debug_cams,methods=["GET"],tags=["debug"],)
 
 app.add_api_route("/close_cams",
     close_cams,methods=["GET"],tags=["release"],)

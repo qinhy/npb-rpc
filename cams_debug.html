@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DepthAI Camera Thumbnail Debug</title>
+
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #101010;
+      color: #eee;
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+    }
+
+    header {
+      padding: 6px 10px;
+      background: #181818;
+      border-bottom: 1px solid #333;
+    }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+    }
+
+    h1 {
+      margin: 0 10px 0 0;
+      font-size: 15px;
+      white-space: nowrap;
+    }
+
+    label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      color: #bbb;
+    }
+
+    input {
+      height: 26px;
+      background: #0d0d0d;
+      color: #eee;
+      border: 1px solid #444;
+      border-radius: 5px;
+      padding: 3px 6px;
+      font-size: 12px;
+    }
+
+    #baseUrl {
+      width: 250px;
+      max-width: 35vw;
+    }
+
+    #intervalMs {
+      width: 70px;
+    }
+
+    button {
+      height: 26px;
+      border: 1px solid #555;
+      background: #272727;
+      color: #fff;
+      padding: 2px 9px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    button:hover {
+      background: #333;
+    }
+
+    #cameraStatusBar {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      background: #333;
+      border-bottom: 1px solid #333;
+    }
+
+    .camera-status {
+      min-width: 0;
+      padding: 4px 7px;
+      background: #161616;
+      color: #aaa;
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #dashboard {
+      min-height: 0;
+      padding: 4px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+    }
+
+    .card {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: #050505;
+      border: 1px solid #333;
+      border-radius: 5px;
+    }
+
+    .image-wrap {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #050505;
+    }
+
+    .label {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      z-index: 2;
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.72);
+      font-size: 11px;
+      line-height: 1.2;
+      pointer-events: none;
+    }
+
+    .meta {
+      position: absolute;
+      right: 4px;
+      bottom: 4px;
+      z-index: 2;
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #aaa;
+      font-size: 10px;
+      line-height: 1.2;
+      pointer-events: none;
+    }
+
+    .ok { color: #7ee787; }
+    .err { color: #ff7b72; }
+    .stopped { color: #d2a8ff; }
+
+    @media (max-width: 700px) {
+      #baseUrl {
+        width: 180px;
+        max-width: 45vw;
+      }
+
+      h1 {
+        display: none;
+      }
+
+      .label {
+        font-size: 9px;
+      }
+
+      .meta {
+        font-size: 9px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+<header>
+  <div class="topbar">
+    <h1>DepthAI Thumbnail Debug</h1>
+
+    <label>
+      API
+      <input id="baseUrl" value="" placeholder="http://127.0.0.1:8000" />
+    </label>
+
+    <label>
+      ms
+      <input id="intervalMs" type="number" min="50" step="50" value="200" />
+    </label>
+
+    <button id="startBtn">Start</button>
+    <button id="stopBtn">Stop</button>
+    <button id="refreshBtn">Now</button>
+  </div>
+</header>
+
+<div id="cameraStatusBar"></div>
+<main id="dashboard"></main>
+
+<script>
+(() => {
+  const CAMERAS = ["rgbd_hand", "rgbd_left", "rgbd_right"];
+  const STREAMS = ["rgb", "left", "right"];
+
+  const dashboard = document.getElementById("dashboard");
+  const cameraStatusBar = document.getElementById("cameraStatusBar");
+  const baseUrlInput = document.getElementById("baseUrl");
+  const intervalInput = document.getElementById("intervalMs");
+  const startBtn = document.getElementById("startBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const refreshBtn = document.getElementById("refreshBtn");
+
+  let timer = null;
+  let statusTimer = null;
+  const state = new Map();
+
+  function baseUrl() {
+    return baseUrlInput.value.trim().replace(/\/+$/, "");
+  }
+
+  function api(path) {
+    return `${baseUrl()}${path}`;
+  }
+
+  function key(camera, stream) {
+    return `${camera}:${stream}`;
+  }
+
+  function buildUI() {
+    // Camera status strip: one compact cell per camera.
+    for (const camera of CAMERAS) {
+      const status = document.createElement("div");
+      status.className = "camera-status";
+      status.id = `status-${camera}`;
+      status.textContent = `${camera}: -`;
+      status.title = camera;
+      cameraStatusBar.appendChild(status);
+    }
+
+    // 3 x 3 dashboard:
+    // rows = rgb / left / right
+    // cols = rgbd_hand / rgbd_left / rgbd_right
+    for (const stream of STREAMS) {
+      for (const camera of CAMERAS) {
+        const card = document.createElement("div");
+        card.className = "card";
+
+        const label = document.createElement("div");
+        label.className = "label";
+        label.textContent = `${camera} / ${stream}`;
+
+        const meta = document.createElement("div");
+        meta.className = "meta stopped";
+        meta.textContent = "stopped";
+
+        const wrap = document.createElement("div");
+        wrap.className = "image-wrap";
+
+        const img = document.createElement("img");
+        img.alt = `${camera} ${stream} thumbnail`;
+
+        wrap.appendChild(img);
+        card.append(wrap, label, meta);
+        dashboard.appendChild(card);
+
+        state.set(key(camera, stream), {
+          img,
+          meta,
+          loading: false,
+          loaded: 0,
+          errors: 0,
+        });
+      }
+    }
+  }
+
+  function frameUrl(camera, stream) {
+    return api(
+      `/camera/${encodeURIComponent(camera)}/frame` +
+      `?stream=${encodeURIComponent(stream)}` +
+      `&thumbnail=true` +
+      `&_=${Date.now()}`
+    );
+  }
+
+  function refreshFrame(camera, stream) {
+    const s = state.get(key(camera, stream));
+    if (!s || s.loading) return;
+
+    s.loading = true;
+    s.meta.className = "meta";
+    s.meta.textContent = "...";
+
+    const next = new Image();
+
+    next.onload = () => {
+      s.loading = false;
+      s.loaded += 1;
+      s.img.src = next.src;
+      s.meta.className = "meta ok";
+      s.meta.textContent = `#${s.loaded}`;
+    };
+
+    next.onerror = () => {
+      s.loading = false;
+      s.errors += 1;
+      s.meta.className = "meta err";
+      s.meta.textContent = `err ${s.errors}`;
+    };
+
+    next.src = frameUrl(camera, stream);
+  }
+
+  function refreshAll() {
+    for (const stream of STREAMS) {
+      for (const camera of CAMERAS) {
+        refreshFrame(camera, stream);
+      }
+    }
+  }
+
+  async function refreshStatus(camera) {
+    const el = document.getElementById(`status-${camera}`);
+
+    try {
+      const response = await fetch(
+        api(`/camera/${encodeURIComponent(camera)}/status`),
+        { cache: "no-store" }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const s = await response.json();
+
+      el.className = `camera-status ${s.online ? "ok" : "err"}`;
+      el.textContent =
+        `${camera}: ${s.online ? "ONLINE" : "OFFLINE"}` +
+        ` | gen ${s.generation ?? "-"}` +
+        ` | frames ${s.frames_published ?? "-"}` +
+        (s.error ? ` | ${s.error}` : "");
+
+      el.title = el.textContent;
+    } catch (error) {
+      el.className = "camera-status err";
+      el.textContent = `${camera}: ${error.message}`;
+      el.title = el.textContent;
+    }
+  }
+
+  function refreshAllStatus() {
+    for (const camera of CAMERAS) {
+      refreshStatus(camera);
+    }
+  }
+
+  function stop() {
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+
+    if (statusTimer !== null) {
+      clearInterval(statusTimer);
+      statusTimer = null;
+    }
+
+    for (const s of state.values()) {
+      if (!s.loading) {
+        s.meta.className = "meta stopped";
+        s.meta.textContent = "stop";
+      }
+    }
+  }
+
+  function start() {
+    stop();
+
+    const intervalMs = Math.max(
+      50,
+      Number.parseInt(intervalInput.value, 10) || 200
+    );
+
+    intervalInput.value = intervalMs;
+
+    refreshAll();
+    refreshAllStatus();
+
+    timer = setInterval(refreshAll, intervalMs);
+    statusTimer = setInterval(refreshAllStatus, 1000);
+  }
+
+  startBtn.addEventListener("click", start);
+  stopBtn.addEventListener("click", stop);
+
+  refreshBtn.addEventListener("click", () => {
+    refreshAll();
+    refreshAllStatus();
+  });
+
+  baseUrlInput.addEventListener("change", () => {
+    if (timer !== null) start();
+  });
+
+  intervalInput.addEventListener("change", () => {
+    if (timer !== null) start();
+  });
+
+  buildUI();
+  start();
+})();
+</script>
+</body>
+</html>
