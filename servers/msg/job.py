@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Generic, TypeVar
 
-from npb import BinaryModel
+from npb import BinaryModel, binary_schema
 from pydantic import Field
 from npb_rpc import RpcEvent
 
@@ -21,12 +21,13 @@ class JobState(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
-
+@binary_schema("npb-rpc.job.request", version=1)
 class JobRequest(BinaryModel):
     """Identify one asynchronous job."""
     job_id: str = Field(min_length=1)
 
 
+@binary_schema("npb-rpc.job.submit.response", version=1)
 class JobSubmitResponse(BinaryModel):
     """Common wire prefix for asynchronous job submission responses.
 
@@ -95,6 +96,7 @@ class JobSnapshot(BinaryModel, Generic[RequestT, ResultT]):
     error: str = ""
 
 
+@binary_schema("npb-rpc.job.store.summary", version=1)
 class JobStoreSummary(BinaryModel):
     queued_jobs: int = -1
     running_jobs: int = -1

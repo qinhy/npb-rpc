@@ -149,32 +149,15 @@ class PcdBuildResult(PcdBuildRequest):
 
 
 @binary_schema("npb-rpc.pcd.job.status.response", version=1)
-class PcdJobStatusResponse(BinaryModel):
-    """Lightweight state for one asynchronous PCD build job."""
+class PcdJobStatusResponse(JobSnapshot[PcdBuildRequest, PcdBuildResult]):
+    pass
 
-    found: bool
-    job_id: str
-    state: PcdJobState | None = None
 
-    backend: PcdBackend | None = None
-    cuda_device: int = 0
+@binary_schema("npb-rpc.pcd.job.result.response", version=1)
+class PcdJobResultResponse(JobResultResponse[PcdBuildResult]):
+    """Full result of one asynchronous PCD build job."""
 
-    rgb_jpg_path: str = ""
-    left_jpg_path: str = ""
-    right_jpg_path: str = ""
-    output_pcd_path: str = ""
-    output_json_path: str | None = None
-
-    # Nanosecond timestamps; 0 means the job has not reached that stage.
-    created_ns: int = 0
-    started_ns: int = 0
-    finished_ns: int = 0
-
-    cache_hit: bool | None = None
-    point_count: int | None = None
-    num_segments: int | None = None
-    timing: PcdTiming = Field(default_factory=PcdTiming)
-    error: str = ""
+    pass
 
 
 # Server status
@@ -212,10 +195,10 @@ class PcdInterface(Protocol):
     def build(self, request: PcdBuildRequest) -> JobSubmitResponse: ...
 
     @api("pcd.job_status", "GET", "job_status")
-    def job_status(self, request: JobRequest) -> JobSnapshot[PcdBuildRequest, PcdBuildResult]: ...
+    def job_status(self, request: JobRequest) -> PcdJobStatusResponse: ...
 
     @api("pcd.job_result", "GET", "job_result")
-    def job_result(self, request: JobRequest) -> JobResultResponse[PcdBuildResult]: ...
+    def job_result(self, request: JobRequest) -> PcdJobResultResponse: ...
 
     @api("pcd.status", "GET", "status")
     def status(self, request: EmptyRequest) -> PcdStatusResponse: ...

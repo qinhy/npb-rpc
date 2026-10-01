@@ -217,35 +217,13 @@ class YoloDetectResult(YoloInferenceRequest):
 
 
 @binary_schema("npb-rpc.yolo.job.status.response", version=1)
-class YoloJobStatusResponse(BinaryModel):
-    """Lightweight state of one asynchronous inference job."""
+class YoloJobStatusResponse(JobSnapshot[YoloInferenceRequest, YoloDetectResult]):
+    pass
 
-    found: bool
-    job_id: str
 
-    state: YoloJobState | None = None
-
-    model_name: str = ""
-    cuda_device: int = 0
-
-    input_jpg_path: str = ""
-    output_json_path: str = ""
-
-    # Nanosecond timestamps.
-    # 0 means the job has not reached that stage yet.
-    created_ns: int = 0
-    started_ns: int = 0
-    finished_ns: int = 0
-
-    # None until the worker selects/loads the model.
-    cache_hit: bool | None = None
-
-    # None until inference has completed.
-    num_detections: int | None = None
-
-    timing: YoloTiming = Field(default_factory=YoloTiming)
-
-    error: str = ""
+@binary_schema("npb-rpc.yolo.job.result.response", version=1)
+class YoloJobResultResponse(JobResultResponse[YoloDetectResult]):
+    pass
 
 
 # ============================================================
@@ -296,11 +274,11 @@ class YoloInterface(Protocol):
     def inference(self,request: YoloInferenceRequest)->JobSubmitResponse:
         ...    
     @api("yolo.job_status", "GET", "job_status")
-    def job_status(self,request: JobRequest)->JobSnapshot[YoloInferenceRequest, YoloDetectResult]:
+    def job_status(self,request: JobRequest)->YoloJobStatusResponse:
         ...    
     @api("yolo.job_result", "GET", "job_result")
-    def job_result(self,request: JobRequest)->JobResultResponse[YoloDetectResult]:
-        ... 
+    def job_result(self,request: JobRequest)->YoloJobResultResponse:
+        ...    
     @api("yolo.status", "GET", "status")
     def status(self,request: EmptyRequest)->YoloStatusResponse:
         ...    
