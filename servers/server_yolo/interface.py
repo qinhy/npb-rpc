@@ -58,23 +58,7 @@ class YoloService(YoloInterface):
     ) -> YoloJobStatusResponse:
         """Return lightweight state for one asynchronous inference job."""
         try:
-            snapshot = self.worker.job_status(request.job_id)
-            res = YoloJobStatusResponse(
-                found=True,
-                job_id=request.job_id,
-                state=snapshot.state,
-                model_name=snapshot.request.model_name,
-                cuda_device=snapshot.request.cuda_device,
-                input_jpg_path=snapshot.request.input_jpg_path,
-                output_json_path=snapshot.request.output_json_path,
-                created_ns=snapshot.created_ns,
-                started_ns=snapshot.started_ns,
-                finished_ns=snapshot.finished_ns,
-                cache_hit=snapshot.cache_hit,
-                num_detections=snapshot.result.num_detections,
-                timing=snapshot.result.timing,
-                error=snapshot.error,
-            )
+            return self.worker.job_status(request.job_id)
         except Exception as exc:
             self.log.exception("yolo.job_status failed")
             return YoloJobStatusResponse(
@@ -82,7 +66,6 @@ class YoloService(YoloInterface):
                 job_id=request.job_id,
                 error=f"job status error: {type(exc).__name__}: {exc}",
             )
-        return res
     
     def job_result(
         self,
