@@ -139,7 +139,7 @@ def db_find_gnss_by_yolo(api:Client,db,start_jst,end_jst,
                   )
 
 
-def db_find_pcds_by_yolo(api,db,doc_id,
+def db_find_pcds_by_yolo(api:Client,db,doc_id,
                          class_name="weed",confidence=0.0):
     return api.db_find(db=db,
                         selector={
