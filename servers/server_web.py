@@ -184,7 +184,7 @@ def capture_cams(store:CustomStore=STORE,
         arm = record.get_arm()
         arm.add_result(run_id=params["meta"]["arm"]["run_id"],
                        data=params["meta"]["arm"]["data"])
-
+    yolo_jobs = []
     for cam in cams:
         t0 = time.perf_counter()
 
@@ -206,7 +206,7 @@ def capture_cams(store:CustomStore=STORE,
         if cam.need_yolo:
             stream = "rgb"
             yolo_rec = record.add_yolo(camera_id=camera_id,stream=stream,data={})
-            yolo_res = cam.yolo.inference(YoloInferenceRequest(
+            yolo_job = cam.yolo.inference(YoloInferenceRequest(
                 model_name=GLOBAL_yolo_config.model_name,
                 confidence=GLOBAL_yolo_config.confidence,
                 size_mode="tiling",
@@ -221,16 +221,17 @@ def capture_cams(store:CustomStore=STORE,
                 output_json_path=str(yolo_rec.expected_data_path()),
                 done_event=RpcEvent.create(),
             ))
+            yolo_jobs.append({"done_event":yolo_job.done_event.model_dump()})
         
         if cam.need_pcd and cam.need_yolo:
             pcd_rec = PCDRecord(parent=record, source_name=camera_id, kind="folder")
             
             with console.status(f"[cyan]YOLO[/] {camera_id}", spinner="dots"):
-                yolo_res.done_event.wait()
-            yolo_res.done_event.delete()
-            yolo_res = cam.yolo.job_status(JobRequest(job_id=yolo_res.job_id))
-            rprint("YOLO", f"{camera_id} | {yolo_res.state}",
-                    "green" if yolo_res.state == "succeeded" else "red")
+                yolo_job.done_event.wait()
+            yolo_job.done_event.delete()
+            yolo_job = cam.yolo.job_status(JobRequest(job_id=yolo_job.job_id))
+            rprint("YOLO", f"{camera_id} | {yolo_job.state}",
+                    "green" if yolo_job.state == "succeeded" else "red")
 
             pcd_res = cam.pcd.build(PcdBuildRequest(
                 backend=GLOBAL_pcd_config.backend,
@@ -252,11 +253,11 @@ def capture_cams(store:CustomStore=STORE,
             rprint("PCD", f"{camera_id} | {pcd_res.state}",
                     "green" if pcd_res.state == "succeeded" else "red")
         else:            
-            rprint("YOLO", f"{camera_id} | {yolo_res.state}",
-                    "green" if yolo_res.state == "succeeded" else "red")
+            rprint("YOLO", f"{camera_id} | {yolo_job.state}",
+                    "green" if yolo_job.state == "succeeded" else "red")
 
-
-    return {"db_name":record.mode,"_id":f"{record.date_jst}:{record.field_id}:{record.record_id}"}
+    id = f"{record.date_jst}:{record.field_id}:{record.record_id}"
+    return {"db_name":record.mode,"_id":id,"yolo_jobs":yolo_jobs}
     
 def capture_hand(params:dict={"meta": {
                         # "gnss":{"the_data":"xxxxxxxxx"},
@@ -364,6 +365,17 @@ def db_add_arm(db_name: DBName, doc_id: str, run_id:str, data:dict, kind:str="ar
 app.add_api_route("/db_record/{db_name}/{doc_id}/add_arm",
                   db_add_arm, methods=["POST"], tags=["db"])
 
+
+
+def job_wait(event:RpcEvent):
+    try:
+        event.wait()
+        event.delete()
+    except Exception as e:
+        print("warning",e)
+
+app.add_api_route("/job/wait",
+                  job_wait, methods=["POST"], tags=["db"])
 
 # legacy supports
 def do_nothing():

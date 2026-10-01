@@ -49,7 +49,10 @@ class Client:
 
     def refresh(self):
         return self._call("GET", "/refresh")
-
+    
+    def job_wait_event(self,json):
+        return self._call("POST", "/job/wait",json=json)
+    
     def open_dual_rgb(self,json={
             "rgb_size": [3872,3008],
             "stereo_size": [1280,800],
@@ -174,12 +177,15 @@ if __name__ == "__main__":
             cap = api.capture_dual(meta={
                             "gnss":{"the_data":"xxxxxxxxx"},
                             "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
-            print("dual:", cap)
-            time.sleep(1)            
+            print("dual:", cap)  
+        
+        last_yolo_job = cap["yolo_jobs"][-1]
         end = current_jst_string()
 
         print("close:", api.close_cams())
         print("hand:", api.open_hand())
+        
+        print("wait yolo:", api.job_wait_event(last_yolo_job["done_event"]))
 
         print(f"search {cap["db_name"]} {start}->{end}",
                     db_find_gnss_by_yolo(api,cap["db_name"],start,end,class_name,confidence))
@@ -188,7 +194,6 @@ if __name__ == "__main__":
                         "gnss":{"the_data":"xxxxxxxxx"},
                         "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
         print("hand:", cap)
-        time.sleep(2)
         print(f"search {cap["db_name"]} {cap["_id"]}",
                 db_find_pcds_by_yolo(api,cap["db_name"],cap["_id"],class_name,confidence))
         
