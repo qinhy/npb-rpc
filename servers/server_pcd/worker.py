@@ -44,6 +44,7 @@ from servers.server_pcd.pcd_calculation import (
     save_pcd,
     split_cloud_uv,
 )
+from servers.worker.store import JobStore
 
 
 LOG = logging.getLogger(__name__.replace(".",":"))
@@ -97,224 +98,6 @@ def save_pcd_atomic(
         with suppress(FileNotFoundError):
             temp.unlink()
 
-# --- Internal job records ---
-
-@dataclass
-class _JobRecord:
-    request: PcdBuildRequest
-    state: PcdJobState = 'queued'
-    created_ns: int = 0
-    started_ns: int = 0
-    finished_ns: int = 0
-    cache_hit: bool | None = None
-    point_count: int | None = None
-    num_segments: int | None = None
-    timing: PcdTiming | None = None
-    result: PcdBuildResult | None = None
-    error: str = ''
-
-@dataclass(frozen=True)
-class JobSnapshot:
-    job_id: str
-    request: PcdBuildRequest
-    state: PcdJobState
-    created_ns: int
-    started_ns: int
-    finished_ns: int
-    cache_hit: bool | None
-    point_count: int | None
-    num_segments: int | None
-    timing: PcdTiming
-    result: PcdBuildResult | None
-    error: str
-
-@dataclass(frozen=True)
-class JobStoreSummary:
-    queued_jobs: int
-    running_jobs: int
-    succeeded_jobs: int
-    failed_jobs: int
-    cancelled_jobs: int
-    build_count: int
-    last_job_id: str
-    last_build_ns: int
-    last_build_ms: float
-    error: str
-
-# --- Job store ---
-
-class PcdJobStore:
-    """
-    Thread-safe asynchronous job state/results.
-
-    Completed jobs are retained according to:
-
-        job_ttl_s
-        max_completed_jobs
-    """
-    TERMINAL = {'succeeded', 'failed', 'cancelled'}
-
-    def __init__(self, *, job_ttl_s: float=3600.0, max_completed_jobs: int=128) -> None:
-        self._lock = threading.RLock()
-        self._jobs: dict[str, _JobRecord] = {}
-        self._job_ttl_ns = max(0, int(job_ttl_s * 1000000000.0))
-        self._max_completed_jobs = max(1, int(max_completed_jobs))
-        self._succeeded_total = 0
-        self._failed_total = 0
-        self._cancelled_total = 0
-        self._last_job_id = ''
-        self._last_build_ns = 0
-        self._last_build_ms = 0.0
-        self._last_error = ''
-
-    def create(self, request: PcdBuildRequest) -> str:
-        job_id = uuid.uuid4().hex
-        now_ns = time.time_ns()
-        with self._lock:
-            self._prune_locked(now_ns)
-            self._jobs[job_id] = _JobRecord(
-                request=request.model_copy(deep=True),
-                created_ns=now_ns,
-            )
-        return job_id
-
-    def discard_queued(self, job_id: str) -> bool:
-        """
-        Remove a job that failed admission into the worker queue.
-
-        This is intentionally not counted as a failed execution.
-        """
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is None or record.state != 'queued':
-                return False
-            del self._jobs[job_id]
-            return True
-
-    def mark_running(self, job_id: str) -> bool:
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is None or record.state != 'queued':
-                return False
-            record.state = 'running'
-            record.started_ns = time.time_ns()
-            return True
-
-    def set_cache_hit(self, job_id: str, cache_hit: bool) -> None:
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is not None:
-                record.cache_hit = bool(cache_hit)
-
-    def succeed(self, job_id: str, result: PcdBuildResult) -> None:
-        now_ns = time.time_ns()
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is None or record.state in self.TERMINAL:
-                return
-            record.state = 'succeeded'
-            record.finished_ns = now_ns
-            record.result = result
-            record.point_count = result.point_count
-            record.num_segments = result.num_segments
-            record.timing = result.timing
-            record.error = ''
-            self._succeeded_total += 1
-            self._last_job_id = job_id
-            self._last_build_ns = now_ns
-            self._last_build_ms = result.timing.total_ms
-            self._last_error = ''
-            self._prune_locked(now_ns)
-
-    def fail(self, job_id: str, error: str) -> None:
-        now_ns = time.time_ns()
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is None or record.state in self.TERMINAL:
-                return
-            message = str(error)
-            record.state = 'failed'
-            record.finished_ns = now_ns
-            record.error = message
-            self._failed_total += 1
-            self._last_error = message
-            self._prune_locked(now_ns)
-
-    def cancel(self, job_id: str, error: str='cancelled') -> bool:
-        now_ns = time.time_ns()
-        with self._lock:
-            record = self._jobs.get(job_id)
-            # Only queued jobs can be cancelled.
-            if record is None or record.state != 'queued':
-                return False
-            record.state = 'cancelled'
-            record.finished_ns = now_ns
-            record.error = str(error)
-            self._cancelled_total += 1
-            self._prune_locked(now_ns)
-            return True
-
-    def snapshot(self, job_id: str) -> JobSnapshot | None:
-        now_ns = time.time_ns()
-        with self._lock:
-            self._prune_locked(now_ns)
-            record = self._jobs.get(job_id)
-            if record is None:
-                return None
-            return JobSnapshot(
-                job_id=job_id,
-                request=record.request,
-                state=record.state,
-                created_ns=record.created_ns,
-                started_ns=record.started_ns,
-                finished_ns=record.finished_ns,
-                cache_hit=record.cache_hit,
-                point_count=record.point_count,
-                num_segments=record.num_segments,
-                timing=record.timing or PcdTiming(),
-                result=record.result,
-                error=record.error,
-            )
-
-    def summary(self) -> JobStoreSummary:
-        now_ns = time.time_ns()
-        with self._lock:
-            self._prune_locked(now_ns)
-            return JobStoreSummary(
-                queued_jobs=sum((record.state == 'queued' for record in self._jobs.values())),
-                running_jobs=sum((record.state == 'running' for record in self._jobs.values())),
-                succeeded_jobs=self._succeeded_total,
-                failed_jobs=self._failed_total,
-                cancelled_jobs=self._cancelled_total,
-                build_count=self._succeeded_total,
-                last_job_id=self._last_job_id,
-                last_build_ns=self._last_build_ns,
-                last_build_ms=self._last_build_ms,
-                error=self._last_error,
-            )
-
-    def _prune_locked(self, now_ns: int) -> None:
-        terminal = [
-            (job_id, record.finished_ns)
-            for job_id, record in self._jobs.items()
-            if record.state in self.TERMINAL and record.finished_ns
-        ]
-        if self._job_ttl_ns:
-            cutoff = now_ns - self._job_ttl_ns
-            for job_id, finished_ns in terminal:
-                if finished_ns < cutoff:
-                    self._jobs.pop(job_id, None)
-        terminal = sorted(
-            (
-                (job_id, record.finished_ns)
-                for job_id, record in self._jobs.items()
-                if record.state in self.TERMINAL and record.finished_ns
-            ),
-            key=lambda item: item[1],
-        )
-        excess = len(terminal) - self._max_completed_jobs
-        for job_id, _ in terminal[:max(0, excess)]:
-            self._jobs.pop(job_id, None)
 
 # --- Calibration cache ---
 
@@ -731,7 +514,6 @@ class PcdCalculator:
                 binary_pcd=request.binary_pcd,
                 ops=self.numpy_ops,
             )
-            shutil.copy(detections_path,str(segments_output_dir) + ".json")
 
             segments = [PcdSegment(
                 detection_index=int(item['detection_index']),
@@ -753,6 +535,8 @@ class PcdCalculator:
             + timing.segmentation_ms
             + timing.write_ms
         )
+        Path(str(segments_output_dir) + ".json").write_text(json.dumps(
+                        dict(detections=manifest,timing=timing.model_dump())))
         return PcdBuildResult(
             **request.model_dump(),
             backend_used=entry.backend,
@@ -796,7 +580,7 @@ class PcdWorker:
         calibration_translation_unit: str='cm',
     ) -> None:
         self.worker_count = max(1, int(worker_count))
-        self.store = PcdJobStore(job_ttl_s=job_ttl_s, max_completed_jobs=max_completed_jobs)
+        self.store = JobStore[PcdBuildRequest, PcdBuildResult](job_ttl_s=job_ttl_s, max_completed_jobs=max_completed_jobs)
         self.backends = PcdBackendCache(backend_options=backend_options)
         self.calibrations = PcdCalibrationCache(
             source_translation_unit=calibration_translation_unit
@@ -937,9 +721,9 @@ class PcdWorker:
             started_ns=snapshot.started_ns,
             finished_ns=snapshot.finished_ns,
             cache_hit=snapshot.cache_hit,
-            point_count=snapshot.point_count,
-            num_segments=snapshot.num_segments,
-            timing=snapshot.timing,
+            point_count=snapshot.result.point_count,
+            num_segments=snapshot.result.num_segments,
+            timing=snapshot.result.timing,
             error=snapshot.error,
         )
 
@@ -971,14 +755,14 @@ class PcdWorker:
             succeeded_jobs=jobs.succeeded_jobs,
             failed_jobs=jobs.failed_jobs,
             cancelled_jobs=jobs.cancelled_jobs,
-            build_count=jobs.build_count,
+            # build_count=jobs.build_count,
             cache_hits=cache_hits,
             cache_misses=cache_misses,
             cached_backends=cached_backends,
             last_job_id=jobs.last_job_id,
-            last_build_ns=jobs.last_build_ns,
-            last_build_ms=jobs.last_build_ms,
-            error=jobs.error,
+            # last_build_ns=jobs.last_build_ns,
+            # last_build_ms=jobs.last_build_ms,
+            error=jobs.last_error,
         )
 
     def _worker_loop(self) -> None:
@@ -998,7 +782,7 @@ class PcdWorker:
         snapshot = self.store.snapshot(job_id)
         if snapshot is None or snapshot.state != 'queued' or (not self.store.mark_running(job_id)):
             return
-        request = snapshot.request
+        request:PcdBuildRequest = snapshot.request
         job_started = time.perf_counter()
         try:
             rgb_path = self._resolve_image_path(request.rgb_jpg_path)

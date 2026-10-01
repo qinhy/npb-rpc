@@ -41,219 +41,9 @@ from servers.server_yolo.yolo_utils import (
     yolo_device,
 )
 
+from servers.worker.store import JobStore
 
 LOG = logging.getLogger(__name__.replace(".",":"))
-
-
-# ============================================================
-# Internal snapshots / records
-# ============================================================
-
-
-@dataclass
-class _JobRecord:
-    request: YoloInferenceRequest
-    state: YoloJobState = "queued"
-    created_ns: int = 0
-    started_ns: int = 0
-    finished_ns: int = 0
-    cache_hit: bool | None = None
-    num_detections: int | None = None
-    timing: YoloTiming | None = None
-    result: YoloDetectResult | None = None
-    error: str = ""
-
-
-@dataclass(frozen=True)
-class JobSnapshot:
-    job_id: str
-    request: YoloInferenceRequest
-    state: YoloJobState
-    created_ns: int
-    started_ns: int
-    finished_ns: int
-    cache_hit: bool | None
-    num_detections: int | None
-    timing: YoloTiming
-    result: YoloDetectResult | None
-    error: str
-
-
-@dataclass(frozen=True)
-class JobStoreSummary:
-    queued_jobs: int
-    running_jobs: int
-    succeeded_jobs: int
-    failed_jobs: int
-    cancelled_jobs: int
-    inference_count: int
-    last_job_id: str
-    last_inference_ns: int
-    last_inference_ms: float
-    error: str
-
-
-# ============================================================
-# Thread-safe async job store
-# ============================================================
-
-
-class YoloJobStore:
-    """Thread-safe async job state/results with bounded completed-job retention."""
-
-    TERMINAL = {"succeeded", "failed", "cancelled"}
-
-    def __init__(self, *, job_ttl_s: float = 3600.0, max_completed_jobs: int = 128) -> None:
-        self._lock = threading.RLock()
-        self._jobs: dict[str, _JobRecord] = {}
-        self._job_ttl_ns = max(0, int(job_ttl_s * 1e9))
-        self._max_completed_jobs = max(1, int(max_completed_jobs))
-        self._succeeded_total = 0
-        self._failed_total = 0
-        self._cancelled_total = 0
-        self._last_job_id = ""
-        self._last_inference_ns = 0
-        self._last_inference_ms = 0.0
-        self._last_error = ""
-
-    def create(self, request: YoloInferenceRequest) -> str:
-        job_id = uuid.uuid4().hex
-        now_ns = time.time_ns()
-        with self._lock:
-            self._prune_locked(now_ns)
-            self._jobs[job_id] = _JobRecord(
-                request=request.model_copy(deep=True),
-                created_ns=now_ns,
-            )
-        return job_id
-
-    def mark_running(self, job_id: str) -> bool:
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is None or record.state != "queued":
-                return False
-            record.state = "running"
-            record.started_ns = time.time_ns()
-            return True
-
-    def set_cache_hit(self, job_id: str, cache_hit: bool) -> None:
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is not None:
-                record.cache_hit = bool(cache_hit)
-
-    def succeed(self, job_id: str, result: YoloDetectResult) -> None:
-        now_ns = time.time_ns()
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is None or record.state in self.TERMINAL:
-                return
-
-            record.state = "succeeded"
-            record.finished_ns = now_ns
-            record.result = result
-            record.num_detections = result.num_detections
-            record.timing = result.timing
-            record.error = ""
-
-            self._succeeded_total += 1
-            self._last_job_id = job_id
-            self._last_inference_ns = now_ns
-            self._last_inference_ms = result.timing.total_ms
-            self._last_error = ""
-            self._prune_locked(now_ns)
-
-    def fail(self, job_id: str, error: str) -> None:
-        now_ns = time.time_ns()
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is None or record.state in self.TERMINAL:
-                return
-
-            record.state = "failed"
-            record.finished_ns = now_ns
-            record.error = str(error)
-            self._failed_total += 1
-            self._last_error = str(error)
-            self._prune_locked(now_ns)
-
-    def cancel(self, job_id: str, error: str = "cancelled") -> bool:
-        now_ns = time.time_ns()
-        with self._lock:
-            record = self._jobs.get(job_id)
-            if record is None or record.state != "queued":
-                return False
-
-            record.state = "cancelled"
-            record.finished_ns = now_ns
-            record.error = error
-            self._cancelled_total += 1
-            self._prune_locked(now_ns)
-            return True
-
-    def snapshot(self, job_id: str) -> JobSnapshot | None:
-        now_ns = time.time_ns()
-        with self._lock:
-            self._prune_locked(now_ns)
-            record = self._jobs.get(job_id)
-            if record is None:
-                return None
-
-            return JobSnapshot(
-                job_id=job_id,
-                request=record.request,
-                state=record.state,
-                created_ns=record.created_ns,
-                started_ns=record.started_ns,
-                finished_ns=record.finished_ns,
-                cache_hit=record.cache_hit,
-                num_detections=record.num_detections,
-                timing=record.timing or YoloTiming(),
-                result=record.result,
-                error=record.error,
-            )
-
-    def summary(self) -> JobStoreSummary:
-        now_ns = time.time_ns()
-        with self._lock:
-            self._prune_locked(now_ns)
-            return JobStoreSummary(
-                queued_jobs=sum(r.state == "queued" for r in self._jobs.values()),
-                running_jobs=sum(r.state == "running" for r in self._jobs.values()),
-                succeeded_jobs=self._succeeded_total,
-                failed_jobs=self._failed_total,
-                cancelled_jobs=self._cancelled_total,
-                inference_count=self._succeeded_total,
-                last_job_id=self._last_job_id,
-                last_inference_ns=self._last_inference_ns,
-                last_inference_ms=self._last_inference_ms,
-                error=self._last_error,
-            )
-
-    def _prune_locked(self, now_ns: int) -> None:
-        terminal = [
-            (job_id, record.finished_ns)
-            for job_id, record in self._jobs.items()
-            if record.state in self.TERMINAL and record.finished_ns
-        ]
-
-        if self._job_ttl_ns:
-            cutoff = now_ns - self._job_ttl_ns
-            for job_id, finished_ns in terminal:
-                if finished_ns < cutoff:
-                    self._jobs.pop(job_id, None)
-
-        terminal = sorted(
-            (
-                (job_id, record.finished_ns)
-                for job_id, record in self._jobs.items()
-                if record.state in self.TERMINAL and record.finished_ns
-            ),
-            key=lambda item: item[1],
-        )
-        excess = len(terminal) - self._max_completed_jobs
-        for job_id, _ in terminal[:max(0, excess)]:
-            self._jobs.pop(job_id, None)
 
 
 # ============================================================
@@ -595,7 +385,7 @@ class YoloWorker:
         write_root: str | Path | None = None,
     ) -> None:
         self.worker_count = max(1, int(worker_count))
-        self.store = YoloJobStore(job_ttl_s=job_ttl_s, max_completed_jobs=max_completed_jobs)
+        self.store = JobStore[YoloInferenceRequest, YoloDetectResult](job_ttl_s=job_ttl_s, max_completed_jobs=max_completed_jobs)
         self.models = YoloModelCache()
         self.detector = UltralyticsYoloDetector()
 
@@ -697,8 +487,8 @@ class YoloWorker:
             started_ns=snapshot.started_ns,
             finished_ns=snapshot.finished_ns,
             cache_hit=snapshot.cache_hit,
-            num_detections=snapshot.num_detections,
-            timing=snapshot.timing,
+            num_detections=snapshot.result.num_detections,
+            timing=snapshot.result.timing,
             error=snapshot.error,
         )
 
@@ -728,14 +518,14 @@ class YoloWorker:
             succeeded_jobs=jobs.succeeded_jobs,
             failed_jobs=jobs.failed_jobs,
             cancelled_jobs=jobs.cancelled_jobs,
-            inference_count=jobs.inference_count,
+            # inference_count=jobs.inference_count,
             cache_hits=cache_hits,
             cache_misses=cache_misses,
             cached_models=cached_models,
             last_job_id=jobs.last_job_id,
-            last_inference_ns=jobs.last_inference_ns,
-            last_inference_ms=jobs.last_inference_ms,
-            error=jobs.error,
+            # last_inference_ns=jobs.last_inference_ns,
+            # last_inference_ms=jobs.last_inference_ms,
+            error=jobs.last_error,
         )
 
     def _worker_loop(self) -> None:

@@ -115,8 +115,8 @@ def open_cams(cams:list[CameraPipelineConfig]=[RGBD_left,RGBD_right],params=None
 def open_rgbd_left():return open_cams(cams=[RGBD_left])
 def open_rgbd_right():return open_cams(cams=[RGBD_right])
 def open_rgbd_hand():return open_cams(cams=[RGBD_hand])
-def open_dual_rgb(params:CameraOpenRequest):open_cams(cams=[RGBD_left,RGBD_right],params=params)
-def open_hand(params:CameraOpenRequest):open_cams(cams=[RGBD_hand],params=params)
+def open_dual_rgb(params:CameraOpenRequest=CameraOpenRequest()):open_cams(cams=[RGBD_left,RGBD_right],params=params)
+def open_hand(params:CameraOpenRequest=CameraOpenRequest()):open_cams(cams=[RGBD_hand],params=params)
 
 def status_cam(cam:CameraPipelineConfig):
     s = json.loads(cam.cli.status(EmptyRequest()).model_dump_json())
