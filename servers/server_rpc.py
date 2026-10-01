@@ -26,11 +26,13 @@ from servers.logger import logging
 
 LOG = logging.getLogger(__name__.replace(".",":"))
 
-if sys.platform == "win32":
-    STORE = CustomStore(root_path=Path("./recordings/").absolute())
-elif sys.platform.startswith("linux"):
-    STORE = CustomStore(root_path=Path("/data/recordings/").absolute())    
-    
+def get_db_root():    
+    if sys.platform == "win32":
+        return Path("./recordings/").absolute()
+    elif sys.platform.startswith("linux"):
+        return Path("./recordings/").absolute()
+
+STORE = CustomStore(root_path=get_db_root())
 console = Console()
 
 

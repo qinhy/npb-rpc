@@ -13,7 +13,12 @@ class Service:
     name: str
     command: list[str]
 
-backend="nng"   # [--backend {nng,zmq,iceoryx2}]
+# if sys.platform == "win32":
+#     python = ("uv", "run")
+# elif sys.platform.startswith("linux"):
+#     python = ("python3")
+
+backend="zmq"   # [--backend {nng,zmq,iceoryx2}]
 transport="ipc" # [--transport {tcp,ipc}]
 SERVICES = [
     Service(

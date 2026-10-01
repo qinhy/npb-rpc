@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from queue import Empty, Full, Queue
 from typing import Generic, TypeVar
 
+from npb_rpc._event import RpcEvent
 from servers.msg.job import JobSubmitResponse
 
 import threading
@@ -535,7 +536,7 @@ class Worker(ABC, Generic[RequestT, ResultT]):
     # ------------------------------------------------------------
 
     def _signal_finished(self, request, job_id: str, state: str, error: str) -> None:
-        event = getattr(request, "done_event", None)
+        event:RpcEvent = getattr(request, "done_event", None)
         if event is not None:
             try:
                 event.set(state=state, error=error)

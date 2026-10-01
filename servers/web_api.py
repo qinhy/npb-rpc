@@ -53,6 +53,15 @@ class Client:
     def job_wait_event(self,json):
         return self._call("POST", "/job/wait",json=json)
     
+    def job_delete_event(self,json):
+        return self._call("POST", "/job/delete",json=json)
+
+    def wait_jobs(self,jobs:list):
+        if len(jobs)==0:return
+        last_yolo_job = jobs.pop()
+        api.job_wait_event(last_yolo_job["done_event"])
+        for job in jobs:api.job_delete_event(job["done_event"])
+    
     def open_dual_rgb(self,json={
             "rgb_size": [3872,3008],
             "stereo_size": [1280,800],
@@ -173,27 +182,27 @@ if __name__ == "__main__":
     print("dual:", api.open_dual_rgb())
 
     start = current_jst_string()
+    yolo_jobs = []
     for i in range(10):
         cap = api.capture_dual(meta={
                         "gnss":{"the_data":"xxxxxxxxx"},
                         "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
+        yolo_jobs += cap["yolo_jobs"]
         print("dual:", cap)
-    
-    last_yolo_job = cap["yolo_jobs"][-1]
     end = current_jst_string()
 
     print("close:", api.close_cams())
     print("hand:", api.open_hand())    
-    print("wait yolo:", api.job_wait_event(last_yolo_job["done_event"]))
+    print(f"wait yolos:", api.wait_jobs(yolo_jobs))
 
-    print(f"search {cap["db_name"]} {start}->{end}",
+    print(f"search {cap['db_name']} {start}->{end}",
                 db_find_gnss_by_yolo(api,cap["db_name"],start,end,class_name,confidence))
 
     cap = api.capture_hand(meta={
                     "gnss":{"the_data":"xxxxxxxxx"},
                     "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
     print("hand:", cap)
-    print(f"search {cap["db_name"]} {cap["_id"]}",
+    print(f"search {cap['db_name']} {cap['_id']}",
             db_find_pcds_by_yolo(api,cap["db_name"],cap["_id"],class_name,confidence))
     
     api.db_add_arm(cap["db_name"], cap["_id"], run_id="UUIDYYYY",data={"ops":"xxxxxxxxx"})

@@ -259,3 +259,7 @@ class RpcEvent(BaseModel):
         ``ttl_seconds`` remains the safety fallback.
         """
         return bool(self._client().delete(self.key))
+    
+    def exists(self) -> bool:
+        """Return True if the event key currently exists in Valkey/Redis."""
+        return bool(self._client().exists(self.key))

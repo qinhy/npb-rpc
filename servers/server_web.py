@@ -19,7 +19,7 @@ from servers.msg.dai import CameraFrameSetRequest, CameraInterface
 from servers.server_dai.interface import add_camera_routes
 from servers.msg.yolo import YoloClient, YoloInferenceRequest, YoloInterface, JobRequest, EmptyRequest
 from servers.server_rpc import (STORE, CameraPipelineConfig, RGBD_hand, RGBD_left, RGBD_right, console,
-                                close_cams, close_rgbd_hand, close_rgbd_left, close_rgbd_right,
+                                close_cams, close_rgbd_hand, close_rgbd_left, close_rgbd_right, get_db_root,
                                 open_dual_rgb, open_hand, open_rgbd_hand, open_rgbd_left, open_rgbd_right, rprint,
                                 status_rgbd_hand, status_rgbd_left, status_rgbd_right)
 from servers.server_yolo.interface import add_yolo_routes
@@ -297,7 +297,7 @@ app.add_api_route("/capture_dual_rgb",
 DBName = Literal["dual_rgb", "rgbd_hand"]
 
 def get_db(db_name: DBName) -> FileSystemDB:
-    root = Path("./recordings/" if sys.platform == "win32" else "/data/recordings/").absolute()
+    root = get_db_root()
     return FileSystemDB(root=root / db_name)
 
 def not_found(reason="missing"):
@@ -370,11 +370,21 @@ app.add_api_route("/db_record/{db_name}/{doc_id}/add_arm",
 
 def job_wait(event:RpcEvent):
     try:
-        event.wait()
-        event.delete()
+        if event.exists():
+            event.wait()
+            event.delete()
     except Exception as e:
         print("warning",e)
 
+def job_delete(event:RpcEvent):
+    try:
+        if event.exists():
+            event.delete()
+    except Exception as e:
+        print("warning",e)
+
+app.add_api_route("/job/delete",
+                  job_delete, methods=["POST"], tags=["db"])
 app.add_api_route("/job/wait",
                   job_wait, methods=["POST"], tags=["db"])
 
@@ -419,4 +429,5 @@ app.add_api_route("/controllers/pcd/set_backend", # Select SGBM/DNN PCD backend 
 
 if __name__ == "__main__":
     refresh_routes()
+    RpcEvent.create().delete()
     uvicorn.run(app, host="0.0.0.0", port=8000)
