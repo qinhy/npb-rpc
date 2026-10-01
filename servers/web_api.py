@@ -118,6 +118,38 @@ class Client:
         ):
         return self._call("POST", "/controllers/pcd/set_backend", json=json)
 
+
+def db_find_gnss_by_yolo(api:Client,db,start_jst,end_jst,
+                         class_name="weed",confidence=0.0):
+    return api.db_find(db=db,
+                        selector={
+                            "_id": {"$gte": start_jst.replace(":",":field_all:"),
+                                    "$lt":  end_jst.replace(":",":field_all:"),
+                                    "$regex": ":yolo:"},
+                            "detections": {
+                                "$elemMatch": {
+                                    "class_name": class_name,
+                                    "confidence": {"$gte": confidence}
+                                }}},
+                        fields=["_id"],
+                        section="gnss"
+                  )
+
+
+def db_find_pcds_by_yolo(api,db,doc_id,
+                         class_name="weed",confidence=0.0):
+    return api.db_find(db=db,
+                        selector={
+                            "_id": doc_id+":pcd:rgbd_hand",
+                            "detections": {
+                                "$elemMatch": {
+                                    "class_name": class_name,
+                                    "confidence": {"$gte": confidence}
+                                }}},
+                        fields=["_id","_attachments"],
+                        section="null"
+                  )
+
 JST = timezone(timedelta(hours=9))
 def current_jst_string() -> str:
     ns = time.time_ns()
@@ -125,44 +157,39 @@ def current_jst_string() -> str:
     nanosecond = ns % 1_000_000_000
     dt = datetime.fromtimestamp(sec, JST)
     return dt.strftime("%Y-%m-%d:%H%M%S.") + f"{nanosecond:09d}JST"
-
   
 
 if __name__ == "__main__":
+    class_name,confidence="person",0.01
     with Client(url="http://127.0.0.1:8000") as api:
-        print("init",api.refresh(),
+        print("init:",api.refresh(),
                     api.yolo_set_model({"model_name":"yolo11l-seg.pt"}),
-                    api.yolo_set_model({"backend":"sgbm","max_depth_m":2.0}))
+                    api.pcd_set_backend({"backend":"sgbm","max_depth_m":2.0}))
         
         print("close:", api.close_cams())
         print("dual:", api.open_dual_rgb())
 
         start = current_jst_string()
         for i in range(10):
-            print("dual:", api.capture_dual(meta={
+            cap = api.capture_dual(meta={
                             "gnss":{"the_data":"xxxxxxxxx"},
-                            "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}}))
+                            "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
+            print("dual:", cap)
+            time.sleep(1)            
         end = current_jst_string()
 
-        class_name,confidence="tie",0.01
-        print(f"search {start}->{end}",
-              api.db_find(db="dual_rgb",
-                    selector={
-                        "_id": {"$gte": start.replace(":",":field_all:"),
-                                "$lt":  end.replace(":",":field_all:"),
-                                "$regex": ":yolo:"},
-                        "detections": {
-                            "$elemMatch": {
-                                "class_name": class_name, "confidence": {"$gte": confidence}
-                            }}},
-                    fields=["_id"],
-                    section="gnss"
-              ))
-        
         print("close:", api.close_cams())
         print("hand:", api.open_hand())
-        print("hand:", api.capture_hand(meta={
+
+        print(f"search {cap["db_name"]} {start}->{end}",
+                    db_find_gnss_by_yolo(api,cap["db_name"],start,end,class_name,confidence))
+
+        cap = api.capture_hand(meta={
                         "gnss":{"the_data":"xxxxxxxxx"},
-                        "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}}))
+                        "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
+        print("hand:", cap)
+        time.sleep(2)
+        print(f"search {cap["db_name"]} {cap["_id"]}",
+                db_find_pcds_by_yolo(api,cap["db_name"],cap["_id"],class_name,confidence))
         
         print("close:", api.close_cams())

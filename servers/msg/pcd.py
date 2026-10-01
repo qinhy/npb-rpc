@@ -24,6 +24,13 @@ class PcdBackend(StrEnum):
     DNN = "dnn"
     VPI = "vpi"
 
+    @classmethod
+    def from_str(cls,bk:str):
+        return {"cpu":cls.CPU,
+        "cuda":cls.CUDA,
+        "dnn":cls.DNN,
+        "vpi":cls.VPI}.get(bk)
+
 
 @binary_schema("npb-rpc.pcd.empty", version=1)
 class EmptyRequest(BinaryModel):

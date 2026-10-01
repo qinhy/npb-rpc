@@ -246,6 +246,7 @@ class UltralyticsYoloDetector:
         ]
         detections.sort(key=lambda item: item.confidence, reverse=True)
         detections = detections[:request.max_detections]
+        for i,d in enumerate(detections):d.detection_index=i
 
         has_masks = any(item.mask is not None for item in detections)
         task = "segment" if request.include_masks and model_task == "segment" else "detect"

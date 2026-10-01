@@ -137,6 +137,7 @@ class YoloInstancePolygon(BaseModel):
 class YoloDetection(BaseModel):
     """One final detection in original-image coordinates."""
 
+    detection_index: int = -1
     class_id: int
     class_name: str
     confidence: float = Field(ge=0.0, le=1.0)

@@ -1031,6 +1031,11 @@ class CameraRecord(RecordModel):
     def has_right(self) -> bool:
         return self.has_image("right")
 
+    def add_meta(self, data: Mapping[str, Any]) -> RecordPath:        
+        path = self.expected_parent_path() / (self.camera_id+".json")
+        _write_json(path, data)
+        return path
+    
     def add_calibration(self, data: Mapping[str, Any]) -> RecordPath:
         self.calib = CalibrationRecord(parent=self.parent, cam_parent=self, data=dict(data))
         return self.calib.write()

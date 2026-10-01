@@ -45,6 +45,10 @@ class CameraPipelineConfig:
     camera_id: str
     camera_ip: str
 
+    cam_open_ms: float = 0.0
+    cam_cap_ms: float = 0.0
+    cam_save_ms: float = 0.0
+
     need_yolo: bool = False
     need_pcd: bool = False
 
@@ -99,7 +103,8 @@ def close_rgbd_hand():return close_cam(RGBD_hand)
 def close_cams():return [close_rgbd_left(),close_rgbd_right(),close_rgbd_hand()]
 
 def open_cams(cams:list[CameraPipelineConfig]=[RGBD_left,RGBD_right],params=None):
-    for cam in cams:
+    for cam in cams:        
+        t0 = time.perf_counter()
         res = cam.cli.status(EmptyRequest())
         with console.status(f"[red]OPEN[/] {cam.camera_id}", spinner="dots"):
             while not res.online:
@@ -112,6 +117,7 @@ def open_cams(cams:list[CameraPipelineConfig]=[RGBD_left,RGBD_right],params=None
                     console.print("[red]OPEN[/]", cam.camera_id, e)
         cam.calib = cam.cli.get_calib(EmptyRequest())
         rprint("OPEN", f"{cam.camera_id} @ {cam.camera_ip}", "green")
+        cam.cam_open_ms = (time.perf_counter() - t0) * 1000.0
     time.sleep(1)
 
 def open_rgbd_left():return open_cams(cams=[RGBD_left])
@@ -158,7 +164,9 @@ def capture_cams(store:CustomStore=STORE,
     record = store.add_record(mode=mode,timestamp_ns_utc=timestamp_ns_utc)
     rprint("CAP", f"{mode} | {', '.join(cam.camera_id for cam in cams)}", "cyan")
     for cam in cams:
+        t0 = time.perf_counter()
         cam.fs = cam.cli.frames(CameraFrameSetRequest())
+        cam.cam_cap_ms = (time.perf_counter() - t0) * 1000.0
 
     # ----------------------------------------------------------
     # Debug view
@@ -171,9 +179,10 @@ def capture_cams(store:CustomStore=STORE,
             debug_show_frame(cam.camera_id, "right", fs.right)
         cv2.waitKey(1)
         
-    for cam in cams:
-        camera_id = cam.camera_id
-        fs = cam.fs
+    for cam in cams:        
+        t0 = time.perf_counter()
+
+        camera_id,fs = cam.camera_id,cam.fs
         record.add_mjpeg_image(camera_id=camera_id,stream="rgb",image_bytes=fs.rgb.tobytes())
         record.add_mjpeg_image(camera_id=camera_id,stream="left",image_bytes=fs.left.tobytes())
         record.add_mjpeg_image(camera_id=camera_id,stream="right",image_bytes=fs.right.tobytes())
@@ -181,6 +190,12 @@ def capture_cams(store:CustomStore=STORE,
             cam.calib = cam.cli.get_calib(EmptyRequest())
         calib_path = record.add_calibration(camera_id=camera_id,data=json.loads(cam.calib.model_dump_json()))
         cam_rec = record.get_camera(camera_id)
+
+        cam.cam_save_ms = (time.perf_counter() - t0) * 1000.0
+
+        cam_rec.add_meta({"cam_open_ms":cam.cam_open_ms,
+                            "cam_cap_ms":cam.cam_cap_ms,
+                            "cam_save_ms":cam.cam_save_ms,})
 
         if cam.need_yolo:
             stream = "rgb"

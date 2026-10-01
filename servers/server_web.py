@@ -23,7 +23,7 @@ from servers.server_rpc import (STORE, CameraPipelineConfig, RGBD_hand, RGBD_lef
                                 open_dual_rgb, open_hand, open_rgbd_hand, open_rgbd_left, open_rgbd_right, rprint,
                                 status_rgbd_hand, status_rgbd_left, status_rgbd_right)
 from servers.server_yolo.interface import add_yolo_routes
-from servers.msg.pcd import PcdBuildRequest, PcdInterface
+from servers.msg.pcd import PcdBackend, PcdBuildRequest, PcdInterface
 from servers.server_pcd.interface import add_pcd_routes
 from servers.store.custom_record_store import CustomStore, PCDRecord
 from servers.store.fs_nosql import FileSystemDB
@@ -156,7 +156,7 @@ def pcd_set_config(config:dict=GLOBAL_pcd_config.model_dump()):
     if "backend" in config:
         if config["backend"]=="sgbm":
             config["backend"]="cpu"
-        GLOBAL_pcd_config.backend=config["backend"]
+        GLOBAL_pcd_config.backend=PcdBackend.from_str(config["backend"])
     if "max_depth_m" in config:
         GLOBAL_pcd_config.max_depth_m=config["max_depth_m"]
     return GLOBAL_pcd_config
@@ -173,8 +173,10 @@ def capture_cams(store:CustomStore=STORE,
     record = store.add_record(mode=mode,timestamp_ns_utc=timestamp_ns_utc)
     rprint("CAP", f"{mode} | {', '.join(cam.camera_id for cam in cams)}", "cyan")
     for cam in cams:
+        t0 = time.perf_counter()
         cam.fs = cam.cli.frames(CameraFrameSetRequest())
-
+        cam.cam_cap_ms = (time.perf_counter() - t0) * 1000.0
+        
     if "meta" in params and "gnss" in params["meta"]:
         record.add_gnss(params["meta"]["gnss"])
 
@@ -184,8 +186,9 @@ def capture_cams(store:CustomStore=STORE,
                        data=params["meta"]["arm"]["data"])
 
     for cam in cams:
-        camera_id = cam.camera_id
-        fs = cam.fs
+        t0 = time.perf_counter()
+
+        camera_id,fs = cam.camera_id,cam.fs
         record.add_mjpeg_image(camera_id=camera_id,stream="rgb",image_bytes=fs.rgb.tobytes())
         record.add_mjpeg_image(camera_id=camera_id,stream="left",image_bytes=fs.left.tobytes())
         record.add_mjpeg_image(camera_id=camera_id,stream="right",image_bytes=fs.right.tobytes())
@@ -193,6 +196,12 @@ def capture_cams(store:CustomStore=STORE,
             cam.calib = cam.cli.get_calib(EmptyRequest())
         calib_path = record.add_calibration(camera_id=camera_id,data=json.loads(cam.calib.model_dump_json()))
         cam_rec = record.get_camera(camera_id)
+
+        cam.cam_save_ms = (time.perf_counter() - t0) * 1000.0
+
+        cam_rec.add_meta({"cam_open_ms":cam.cam_open_ms,
+                            "cam_cap_ms":cam.cam_cap_ms,
+                            "cam_save_ms":cam.cam_save_ms})
 
         if cam.need_yolo:
             stream = "rgb"
@@ -247,7 +256,7 @@ def capture_cams(store:CustomStore=STORE,
                     "green" if yolo_res.state == "succeeded" else "red")
 
 
-    return {"db_name":record.mode,"_id":f":{record.date_jst}:{record.field_id}:{record.record_id}"}
+    return {"db_name":record.mode,"_id":f"{record.date_jst}:{record.field_id}:{record.record_id}"}
     
 def capture_hand(params:dict={"meta": {
                         # "gnss":{"the_data":"xxxxxxxxx"},
