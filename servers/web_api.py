@@ -164,37 +164,38 @@ def current_jst_string() -> str:
 
 if __name__ == "__main__":
     class_name,confidence="person",0.01
-    with Client(url="http://127.0.0.1:8000") as api:
-        print("init:",api.refresh(),
-                    api.yolo_set_model({"model_name":"yolo11l-seg.pt"}),
-                    api.pcd_set_backend({"backend":"sgbm","max_depth_m":2.0}))
-        
-        print("close:", api.close_cams())
-        print("dual:", api.open_dual_rgb())
+    api = Client(url="http://127.0.0.1:8000")
+    print("init:",api.refresh(),
+                api.yolo_set_model({"model_name":"yolo11l-seg.pt"}),
+                api.pcd_set_backend({"backend":"sgbm","max_depth_m":2.0}))
+    
+    print("close:", api.close_cams())
+    print("dual:", api.open_dual_rgb())
 
-        start = current_jst_string()
-        for i in range(10):
-            cap = api.capture_dual(meta={
-                            "gnss":{"the_data":"xxxxxxxxx"},
-                            "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
-            print("dual:", cap)  
-        
-        last_yolo_job = cap["yolo_jobs"][-1]
-        end = current_jst_string()
-
-        print("close:", api.close_cams())
-        print("hand:", api.open_hand())
-        
-        print("wait yolo:", api.job_wait_event(last_yolo_job["done_event"]))
-
-        print(f"search {cap["db_name"]} {start}->{end}",
-                    db_find_gnss_by_yolo(api,cap["db_name"],start,end,class_name,confidence))
-
-        cap = api.capture_hand(meta={
+    start = current_jst_string()
+    for i in range(10):
+        cap = api.capture_dual(meta={
                         "gnss":{"the_data":"xxxxxxxxx"},
                         "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
-        print("hand:", cap)
-        print(f"search {cap["db_name"]} {cap["_id"]}",
-                db_find_pcds_by_yolo(api,cap["db_name"],cap["_id"],class_name,confidence))
-        
-        print("close:", api.close_cams())
+        print("dual:", cap)
+    
+    last_yolo_job = cap["yolo_jobs"][-1]
+    end = current_jst_string()
+
+    print("close:", api.close_cams())
+    print("hand:", api.open_hand())    
+    print("wait yolo:", api.job_wait_event(last_yolo_job["done_event"]))
+
+    print(f"search {cap["db_name"]} {start}->{end}",
+                db_find_gnss_by_yolo(api,cap["db_name"],start,end,class_name,confidence))
+
+    cap = api.capture_hand(meta={
+                    "gnss":{"the_data":"xxxxxxxxx"},
+                    "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
+    print("hand:", cap)
+    print(f"search {cap["db_name"]} {cap["_id"]}",
+            db_find_pcds_by_yolo(api,cap["db_name"],cap["_id"],class_name,confidence))
+    
+    api.db_add_arm(cap["db_name"], cap["_id"], run_id="UUIDYYYY",data={"ops":"xxxxxxxxx"})
+    print("close:", api.close_cams())
+
