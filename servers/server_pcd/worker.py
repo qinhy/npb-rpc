@@ -473,18 +473,21 @@ class PcdCalculator:
         v = ops.astype_int64(ops.round(uv[:, 1]))
         colors_rgb = rgb8(rgb[v, u, :3], order='RGB', ops=ops)
         timing.projection_ms = (time.perf_counter() - t0) * 1000.0
-        t0 = time.perf_counter()
-        save_pcd_atomic(
-            output_pcd_path,
-            points_left,
-            colors_rgb,
-            ops=ops,
-            binary=request.binary_pcd,
-            job_id=job_id,
-        )
-        timing.write_ms = (time.perf_counter() - t0) * 1000.0
         segments: list[PcdSegment] = []
-        if detections_path is not None:
+
+        if detections_path is None:
+            t0 = time.perf_counter()
+            save_pcd_atomic(
+                output_pcd_path,
+                points_left,
+                colors_rgb,
+                ops=ops,
+                binary=request.binary_pcd,
+                job_id=job_id,
+            )
+            timing.write_single_ms = (time.perf_counter() - t0) * 1000.0
+
+        else:
             assert segments_output_dir is not None
             t0 = time.perf_counter()
             detections_json = json.loads(detections_path.read_text(encoding='utf-8'))
@@ -505,7 +508,7 @@ class PcdCalculator:
                 erode_pixels=request.erode_pixels,
                 exclusive=request.exclusive_segments,
                 save_background=request.save_background,
-                save_full_cloud=False,
+                save_full_cloud=True,
                 binary_pcd=request.binary_pcd,
                 ops=self.numpy_ops,
             )
@@ -519,6 +522,7 @@ class PcdCalculator:
                 pcd_path=str(segments_output_dir / item['pcd']),
             ) for item in manifest]
             timing.segmentation_ms = (time.perf_counter() - t0) * 1000.0
+        
         timing.total_ms = (
             timing.backend_ms
             + timing.read_ms
@@ -528,7 +532,7 @@ class PcdCalculator:
             + timing.points_ms
             + timing.projection_ms
             + timing.segmentation_ms
-            + timing.write_ms
+            + timing.write_single_ms
         )
         Path(str(segments_output_dir) + ".json").write_text(json.dumps(
                         dict(detections=manifest,timing=timing.model_dump())))

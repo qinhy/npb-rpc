@@ -274,14 +274,13 @@ class UltralyticsYoloDetector:
             timing=timing,
         )
         LOG.info(f"{dict(
-            image_width=image_w,
-            image_height=image_h,
-            tile_size=tile_size,
-            tile_count=tile_count,
-            preprocess_ms=preprocess_ms,
-            inference_ms=inference_ms,
-            postprocess_ms=postprocess_ms,
-            total_ms=(time.perf_counter() - t_total) * 1000.0,
+            img_size=(image_w,image_h),
+            crop=effective_roi_box,
+            tile=f"{tile_size}x{tile_count}p",
+            pre_ms=int(preprocess_ms),
+            infer_ms=int(inference_ms),
+            post_ms=int(postprocess_ms),
+            total_ms=int((time.perf_counter() - t_total) * 1000.0),
         )}")
         return res
 

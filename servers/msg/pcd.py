@@ -129,7 +129,7 @@ class PcdTiming(BaseModel):
     points_ms: float = 0.0
     projection_ms: float = 0.0
     segmentation_ms: float = 0.0
-    write_ms: float = 0.0
+    write_single_ms: float = 0.0
     total_ms: float = 0.0
 
 
