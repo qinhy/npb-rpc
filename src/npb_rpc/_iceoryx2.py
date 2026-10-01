@@ -948,7 +948,10 @@ class Iceoryx2RpcServer:
         except RpcTransportError:
             raise
         except Exception as exc:
-            message = str(exc) if self.debug_errors else "RPC handler failed"
+            message = (
+                f"{type(exc).__name__}: {exc}" if self.debug_errors
+                else f"RPC handler failed ({type(exc).__name__})"
+            )
             self._send_error(active, envelope.request_id, Status.INTERNAL, message)
 
     def serve_forever(self, *, poll_interval_ms: int = 100) -> None:

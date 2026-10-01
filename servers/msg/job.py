@@ -81,8 +81,9 @@ class JobRecord(BinaryModel, Generic[RequestT, ResultT]):
 
 
 class JobSnapshot(BinaryModel, Generic[RequestT, ResultT]):
+    found: bool = False
     job_id: str = ""
-    request: RequestT | None
+    request: RequestT | None = None
 
     state: JobState = JobState.FAILED
 
@@ -92,7 +93,7 @@ class JobSnapshot(BinaryModel, Generic[RequestT, ResultT]):
 
     cache_hit: bool = False
 
-    result: ResultT | None
+    result: ResultT | None = None
     error: str = ""
 
 

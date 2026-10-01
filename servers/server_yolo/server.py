@@ -20,12 +20,12 @@ LOG = logging.getLogger(__name__.replace(".",":"))
 STOP = threading.Event()
 
 
-def make_server(endpoint: str, yolo: YoloWorker, *, backend: str = "nng"):
+def make_server(endpoint: str, yolo: YoloWorker, *, backend: str = "nng", debug_errors: bool = False):
     server_type = {"nng": NngRpcServer, "zmq": ZmqRpcServer, "iceoryx2": Iceoryx2RpcServer}.get(backend)
     if server_type is None:
         raise ValueError(f"unsupported RPC backend: {backend!r}")
 
-    server = server_type.bind(endpoint)
+    server = server_type.bind(endpoint, debug_errors=debug_errors)
     add_rpc(server, YoloInterface, YoloService(yolo, LOG))
     return server
 
@@ -34,6 +34,7 @@ def run_server(
     endpoint: str,
     *,
     backend: str = "nng",
+    debug_errors: bool = False,
     discovery: RedisDiscovery | None = None,
     service: str = YoloInterface.service,
     instance_id: str | None = None,
@@ -59,7 +60,7 @@ def run_server(
     try:
         while not STOP.is_set():
             try:
-                raw_server = make_server(endpoint, yolo, backend=backend)
+                raw_server = make_server(endpoint, yolo, backend=backend, debug_errors=debug_errors)
                 server = (
                     raw_server
                     if discovery is None

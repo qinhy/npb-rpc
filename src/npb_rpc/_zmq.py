@@ -517,7 +517,10 @@ class ZmqRpcServer:
             )
             return True
         except Exception as exc:
-            message = str(exc) if self.debug_errors else "RPC handler failed"
+            message = (
+                f"{type(exc).__name__}: {exc}" if self.debug_errors
+                else f"RPC handler failed ({type(exc).__name__})"
+            )
             self._send_error(
                 peer,
                 envelope.request_id,

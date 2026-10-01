@@ -217,7 +217,7 @@ def test_message_limits_and_internal_errors() -> None:
         with pytest.raises(RemoteRpcError) as caught:
             client.call("broken", SumRequest(values=np.arange(3)), SumResponse)
         assert caught.value.status == Status.INTERNAL
-        assert caught.value.message == "RPC handler failed"
+        assert caught.value.message == "RPC handler failed (RuntimeError)"
     finally:
         close_pair(server, client, thread)
 

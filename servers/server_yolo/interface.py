@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from servers.msg.job import JobResultResponse
-
 """Unified RPC + HTTP interface for the YOLO service."""
 
 from servers.logger import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from npb_rpc.utils import add_fastapi_routes
 
 from servers.msg.yolo import (
-    YoloDetectResult,
     YoloInterface,
     EmptyRequest,
     YoloInferenceRequest,
@@ -20,7 +17,8 @@ from servers.msg.yolo import (
     YoloJobStatusResponse,
     YoloStatusResponse,
 )
-from servers.server_yolo.worker import YoloWorker
+if TYPE_CHECKING:
+    from servers.server_yolo.worker import YoloWorker
 
 
 LOG = logging.getLogger(__name__.replace(".",":"))
@@ -44,7 +42,7 @@ class YoloService(YoloInterface):
         """Queue inference and return immediately with a job id."""
         try:
             res = self.worker.submit(request)
-            self.log.info(str(res))
+            return res
         except Exception as exc:
             self.log.exception("yolo.inference failed")
             return JobSubmitResponse(
@@ -58,7 +56,10 @@ class YoloService(YoloInterface):
     ) -> YoloJobStatusResponse:
         """Return lightweight state for one asynchronous inference job."""
         try:
-            return self.worker.job_status(request.job_id)
+            snapshot = self.worker.job_status(request.job_id)
+            if snapshot is None:
+                return YoloJobStatusResponse(job_id=request.job_id, error="job not found or expired")
+            return YoloJobStatusResponse(**snapshot.model_dump())
         except Exception as exc:
             self.log.exception("yolo.job_status failed")
             return YoloJobStatusResponse(
@@ -73,7 +74,14 @@ class YoloService(YoloInterface):
     ) -> YoloJobResultResponse:
         """Return the full result when a job has succeeded."""
         try:
-            return self.worker.job_result(request.job_id)
+            snapshot = self.worker.job_status(request.job_id)
+            if snapshot is None:
+                return YoloJobResultResponse(found=False, job_id=request.job_id, error="job not found or expired")
+            return YoloJobResultResponse(
+                found=True, job_id=request.job_id, state=snapshot.state,
+                result=snapshot.result if snapshot.state == "succeeded" else None,
+                error=snapshot.error,
+            )
         except Exception as exc:
             self.log.exception("yolo.job_result failed")
             return YoloJobResultResponse(
@@ -90,7 +98,16 @@ class YoloService(YoloInterface):
         del request
 
         try:
-            return self.worker.status()
+            jobs = self.worker.status()
+            models, hits, misses = self.worker.models.snapshot()
+            return YoloStatusResponse(
+                online=self.worker.online,
+                **jobs.model_dump(exclude={"last_error", "last_finished_ns"}),
+                inference_count=jobs.succeeded_jobs,
+                cached_models=models, cache_hits=hits, cache_misses=misses,
+                last_inference_ns=jobs.last_finished_ns,
+                error=jobs.last_error,
+            )
         except Exception as exc:
             self.log.exception("yolo.status failed")
             return YoloStatusResponse(

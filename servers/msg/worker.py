@@ -182,7 +182,7 @@ class JobStore(Generic[RequestT, ResultT]):
     def snapshot(
         self,
         job_id: str,
-    ) -> JobSnapshot[RequestT, ResultT]:
+    ) -> JobSnapshot[RequestT, ResultT] | None:
 
         now_ns = time.time_ns()
 
@@ -192,9 +192,10 @@ class JobStore(Generic[RequestT, ResultT]):
             record = self._jobs.get(job_id)
 
             if record is None:
-                return JobSnapshot()
+                return None
 
             return JobSnapshot(
+                found=True,
                 job_id=job_id,
                 request=record.request,
                 state=record.state,
@@ -419,10 +420,15 @@ class Worker(ABC, Generic[RequestT, ResultT]):
             accepted=True,
             job_id=job_id,
             state="queued",
+            done_event=getattr(request, "done_event", None),
         )
 
     def cancel(self, job_id: str) -> bool:
-        return self.store.cancel(job_id)
+        snapshot = self.store.snapshot(job_id)
+        cancelled = self.store.cancel(job_id)
+        if cancelled and snapshot is not None:
+            self._signal_finished(snapshot.request, job_id, "cancelled", "cancelled")
+        return cancelled
 
     def job_status(self, job_id: str):
         return self.store.snapshot(job_id)
@@ -437,6 +443,11 @@ class Worker(ABC, Generic[RequestT, ResultT]):
             return None
 
         return snapshot.result
+
+    @property
+    def online(self) -> bool:
+        with self._state_lock:
+            return self._started and not self._closed
 
     def status(self):
         return self.store.summary()
@@ -475,12 +486,16 @@ class Worker(ABC, Generic[RequestT, ResultT]):
             return
 
         request = snapshot.request
+        completion_state = "succeeded"
+        completion_error = ""
 
         try:
             result = self.process(
                 request=request,
                 job_id=job_id,
             )
+            if result is None:
+                raise RuntimeError(f"{self.name} process returned no result")
 
             self.store.succeed(
                 job_id,
@@ -488,6 +503,8 @@ class Worker(ABC, Generic[RequestT, ResultT]):
             )
 
         except Exception as exc:
+            completion_state = "failed"
+            completion_error = f"{type(exc).__name__}: {exc}"
             LOG.exception(
                 "%s job %s failed",
                 self.name,
@@ -500,6 +517,7 @@ class Worker(ABC, Generic[RequestT, ResultT]):
             )
 
         finally:
+            self._signal_finished(request, job_id, completion_state, completion_error)
             try:
                 self.on_finished(
                     request=request,
@@ -515,6 +533,14 @@ class Worker(ABC, Generic[RequestT, ResultT]):
     # ------------------------------------------------------------
     # Service-specific hooks
     # ------------------------------------------------------------
+
+    def _signal_finished(self, request, job_id: str, state: str, error: str) -> None:
+        event = getattr(request, "done_event", None)
+        if event is not None:
+            try:
+                event.set(state=state, error=error)
+            except Exception:
+                LOG.exception("%s job %s completion signal failed", self.name, job_id)
 
     @abstractmethod
     def process(

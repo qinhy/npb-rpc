@@ -594,80 +594,59 @@ class PcdWorker(
         job_id: str,
     ) -> PcdBuildResult:
         
-        snapshot = self.store.snapshot(job_id)
-        if snapshot is None or snapshot.state != 'queued' or (not self.store.mark_running(job_id)):
-            return
-        request:PcdBuildRequest = snapshot.request
         job_started = time.perf_counter()
-        try:
-            rgb_path = self._resolve_image_path(request.rgb_jpg_path)
-            left_path = self._resolve_image_path(request.left_jpg_path)
-            right_path = self._resolve_image_path(request.right_jpg_path)
-            calibration_path = self._resolve_input_json(request.calibration_json_path)
-            output_pcd_path = self._resolve_output_pcd(request.output_pcd_path)
-            output_json_path = self._resolve_optional_output_json(request.output_json_path)
-            detections_path = self._resolve_optional_input_json(request.detections_json_path)
-            segments_output_dir = self._resolve_optional_output_dir(request.segments_output_dir)
-            if (
-                output_json_path is not None
-                and detections_path is not None
-                and output_json_path == detections_path
-            ):
-                raise ValueError('output_json_path must not overwrite detections_json_path')
-            if output_json_path is not None and output_json_path == calibration_path:
-                raise ValueError('output_json_path must not overwrite calibration_json_path')
-            inputs = self.calculator.read_inputs(
-                rgb_path=rgb_path,
-                left_path=left_path,
-                right_path=right_path,
+        rgb_path = self._resolve_image_path(request.rgb_jpg_path)
+        left_path = self._resolve_image_path(request.left_jpg_path)
+        right_path = self._resolve_image_path(request.right_jpg_path)
+        calibration_path = self._resolve_input_json(request.calibration_json_path)
+        output_pcd_path = self._resolve_output_pcd(request.output_pcd_path)
+        output_json_path = self._resolve_optional_output_json(request.output_json_path)
+        detections_path = self._resolve_optional_input_json(request.detections_json_path)
+        segments_output_dir = self._resolve_optional_output_dir(request.segments_output_dir)
+        if (
+            output_json_path is not None
+            and detections_path is not None
+            and output_json_path == detections_path
+        ):
+            raise ValueError('output_json_path must not overwrite detections_json_path')
+        if output_json_path is not None and output_json_path == calibration_path:
+            raise ValueError('output_json_path must not overwrite calibration_json_path')
+        inputs = self.calculator.read_inputs(
+            rgb_path=rgb_path,
+            left_path=left_path,
+            right_path=right_path,
+        )
+        stereo_h, stereo_w = inputs.left.shape[:2]
+        with self.backends.acquire(
+            request.backend,
+            request.cuda_device,
+            width=int(stereo_w),
+            height=int(stereo_h),
+        ) as (entry, cache_hit, backend_ms):
+            self.store.set_cache_hit(job_id, cache_hit)
+            result = self.calculator.build(
+                request=request,
+                inputs=inputs,
+                entry=entry,
+                calibration_path=calibration_path,
+                output_pcd_path=output_pcd_path,
+                detections_path=detections_path,
+                segments_output_dir=segments_output_dir,
+                job_id=job_id,
+                backend_ms=backend_ms,
             )
-            stereo_h, stereo_w = inputs.left.shape[:2]
-            with self.backends.acquire(
-                request.backend,
-                request.cuda_device,
-                width=int(stereo_w),
-                height=int(stereo_h),
-            ) as (entry, cache_hit, backend_ms):
-                self.store.set_cache_hit(job_id, cache_hit)
-                result = self.calculator.build(
-                    request=request,
-                    inputs=inputs,
-                    entry=entry,
-                    calibration_path=calibration_path,
-                    output_pcd_path=output_pcd_path,
-                    detections_path=detections_path,
-                    segments_output_dir=segments_output_dir,
-                    job_id=job_id,
-                    backend_ms=backend_ms,
-                )
-                self.store.succeed(job_id, result)
-            # Includes decode, backend acquisition, calculation, and PCD writes.
-            result.timing.total_ms = (time.perf_counter() - job_started) * 1000.0
-            if output_json_path is not None:
-                write_json_atomic(output_json_path, result, job_id)
-            LOG.info(
-                'PCD job %s succeeded: %d points, %d segments, %.1f ms',
-                job_id,
-                result.point_count,
-                result.num_segments,
-                result.timing.total_ms,
-            )
-        except Exception as exc:
-            LOG.exception('PCD job %s failed', job_id)
-            self.store.fail(job_id, f'{type(exc).__name__}: {exc}')
-
-        finally:
-            if request.done_event:request.done_event.set()
-
-    def on_finished(
-        self,
-        *,
-        request: PcdBuildRequest,
-        job_id: str,
-    ) -> None:
-
-        if request.done_event:
-            request.done_event.set()
+        # Includes decode, backend acquisition, calculation, and PCD writes.
+        result.timing.total_ms = (time.perf_counter() - job_started) * 1000.0
+        if output_json_path is not None:
+            write_json_atomic(output_json_path, result, job_id)
+        LOG.info(
+            'PCD job %s succeeded: %d points, %d segments, %.1f ms',
+            job_id,
+            result.point_count,
+            result.num_segments,
+            result.timing.total_ms,
+        )
+        return result
 
     def cleanup(self) -> None:
         self.backends.clear()

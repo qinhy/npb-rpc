@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from servers.msg.job import JobResultResponse, JobSnapshot, JobStoreSummary
-
 """Unified RPC + HTTP interface for the PCD service."""
 
 from servers.logger import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from npb_rpc.utils import add_fastapi_routes
 
 from servers.msg.pcd import (
-    PcdBuildResult,
+    PcdJobStatusResponse,
+    PcdStatusResponse,
     PcdInterface,
     EmptyRequest,
     PcdBuildRequest,
@@ -18,7 +17,8 @@ from servers.msg.pcd import (
     JobRequest,
     PcdJobResultResponse
 )
-from servers.server_pcd.worker import PcdWorker
+if TYPE_CHECKING:
+    from servers.server_pcd.worker import PcdWorker
 
 
 LOG = logging.getLogger(__name__.replace(".",":"))
@@ -42,22 +42,19 @@ class PcdService(PcdInterface):
             self.log.exception("pcd.build failed")
             res = JobSubmitResponse(
                 accepted=False,
-                rgb_jpg_path=request.rgb_jpg_path,
-                left_jpg_path=request.left_jpg_path,
-                right_jpg_path=request.right_jpg_path,
-                output_pcd_path=request.output_pcd_path,
-                output_json_path=request.output_json_path,
                 error=f"build submit error: {type(exc).__name__}: {exc}",
             )
-        res.done_event=request.done_event
         return res
 
-    def job_status(self, request: JobRequest) -> JobSnapshot[PcdBuildRequest, PcdBuildResult]:
+    def job_status(self, request: JobRequest) -> PcdJobStatusResponse:
         try:
-            return self.worker.job_status(request.job_id)
+            snapshot = self.worker.job_status(request.job_id)
+            if snapshot is None:
+                return PcdJobStatusResponse(job_id=request.job_id, error="job not found or expired")
+            return PcdJobStatusResponse(**snapshot.model_dump())
         except Exception as exc:
             self.log.exception("pcd.job_status failed")
-            return JobSnapshot[PcdBuildRequest, PcdBuildResult](
+            return PcdJobStatusResponse(
                 found=False,
                 job_id=request.job_id,
                 error=f"job status error: {type(exc).__name__}: {exc}",
@@ -65,7 +62,14 @@ class PcdService(PcdInterface):
 
     def job_result(self, request: JobRequest) -> PcdJobResultResponse:
         try:
-            return self.worker.job_result(request.job_id)
+            snapshot = self.worker.job_status(request.job_id)
+            if snapshot is None:
+                return PcdJobResultResponse(found=False, job_id=request.job_id, error="job not found or expired")
+            return PcdJobResultResponse(
+                found=True, job_id=request.job_id, state=snapshot.state,
+                result=snapshot.result if snapshot.state == "succeeded" else None,
+                error=snapshot.error,
+            )
         except Exception as exc:
             self.log.exception("pcd.job_result failed")
             return PcdJobResultResponse(
@@ -74,13 +78,22 @@ class PcdService(PcdInterface):
                 error=f"job result error: {type(exc).__name__}: {exc}",
             )
 
-    def status(self, request: EmptyRequest) -> JobStoreSummary:
+    def status(self, request: EmptyRequest) -> PcdStatusResponse:
         del request
         try:
-            return self.worker.status()
+            jobs = self.worker.status()
+            backends, hits, misses = self.worker.backends.snapshot()
+            return PcdStatusResponse(
+                online=self.worker.online,
+                **jobs.model_dump(exclude={"last_error", "last_finished_ns"}),
+                build_count=jobs.succeeded_jobs,
+                cached_backends=backends, cache_hits=hits, cache_misses=misses,
+                last_build_ns=jobs.last_finished_ns,
+                error=jobs.last_error,
+            )
         except Exception as exc:
             self.log.exception("pcd.status failed")
-            return JobStoreSummary(
+            return PcdStatusResponse(
                 online=False,
                 error=f"status error: {type(exc).__name__}: {exc}",
             )

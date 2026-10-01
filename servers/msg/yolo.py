@@ -216,7 +216,7 @@ class YoloDetectResult(YoloInferenceRequest):
 # ============================================================
 
 
-@binary_schema("npb-rpc.yolo.job.status.response", version=1)
+@binary_schema("npb-rpc.yolo.job.status.response", version=2)
 class YoloJobStatusResponse(JobSnapshot[YoloInferenceRequest, YoloDetectResult]):
     pass
 

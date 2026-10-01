@@ -73,18 +73,19 @@ def print_status(status:YoloStatusResponse) -> None:
 
 
 def print_job_status(status:YoloJobStatusResponse) -> None:
-    timing = status.timing
+    request = status.request
+    result = status.result
     print(
         "job:",
         f"found={status.found}",
         f"id={status.job_id!r}",
         f"state={status.state!r}",
-        f"model={status.model_name!r}",
-        f"device={status.cuda_device}",
+        f"model={request.model_name if request else None!r}",
+        f"device={request.cuda_device if request else None}",
         f"cache_hit={status.cache_hit}",
-        f"detections={status.num_detections}",
-        f"total_ms={timing.total_ms:.3f}",
-        f"output={status.output_json_path!r}",
+        f"detections={result.num_detections if result else 0}",
+        f"total_ms={result.timing.total_ms if result else 0:.3f}",
+        f"output={request.output_json_path if request else None!r}",
         f"error={status.error!r}",
     )
 
@@ -202,8 +203,8 @@ def run_client(args: argparse.Namespace, discovery: RedisDiscovery) -> None:
             f"accepted={response.accepted}",
             f"job_id={response.job_id!r}",
             f"state={response.state!r}",
-            f"input={response.input_jpg_path!r}",
-            f"output={response.output_json_path!r}",
+            f"input={request.input_jpg_path!r}",
+            f"output={request.output_json_path!r}",
             f"error={response.error!r}",
         )
 
@@ -248,6 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--endpoint", default=None)
     parser.add_argument("--advertise-endpoint")
+    parser.add_argument("--debug-errors", action="store_true", help="include exception messages in RPC errors (local debugging)")
     parser.add_argument("--registry", type=Path)
 
     # Server worker
@@ -338,6 +340,7 @@ def main() -> None:
             service=args.service,
             instance_id=server_name,
             advertise_endpoint=args.advertise_endpoint,
+            debug_errors=args.debug_errors,
             worker_count=args.worker_count,
             queue_size=args.queue_size,
             job_ttl_s=args.job_ttl,

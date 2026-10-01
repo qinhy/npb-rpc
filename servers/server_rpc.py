@@ -19,6 +19,7 @@ from servers.msg.dai import (
     CameraInterface, CameraClient
 )
 from servers.msg.job import JobRequest
+from servers.job_client import wait_for_submission
 from servers.msg.yolo import YoloInferenceRequest, YoloInterface, YoloClient
 from servers.msg.pcd import PcdBuildRequest, PcdInterface, PcdClient, PcdBackend
 
@@ -195,16 +196,15 @@ def capture_cams(store:CustomStore=STORE,
                 
                 input_jpg_path=str(cam_rec.expected_image_path(stream)),
                 output_json_path=str(yolo_rec.expected_data_path()),
-                done_event=RpcEvent.create(),
             ))
+            if not yolo_res.accepted:
+                raise RuntimeError(yolo_res.error or "YOLO submission rejected")
         
         if cam.need_pcd and cam.need_yolo:
             pcd_rec = PCDRecord(parent=record, source_name=camera_id, kind="folder")
             
             with console.status(f"[cyan]YOLO[/] {camera_id}", spinner="dots"):
-                yolo_res.done_event.wait()
-            yolo_res.done_event.delete()
-            yolo_res = cam.yolo.job_status(JobRequest(job_id=yolo_res.job_id))
+                yolo_res = wait_for_submission(cam.yolo, yolo_res)
             rprint("YOLO", f"{camera_id} | {yolo_res.state}",
                     "green" if yolo_res.state == "succeeded" else "red")
 
@@ -219,12 +219,9 @@ def capture_cams(store:CustomStore=STORE,
                 output_pcd_path=str(pcd_rec.expected_full_pcd_path()),
                 detections_json_path=str(yolo_rec.expected_data_path()),
                 segments_output_dir=str(pcd_rec.expected_full_pcd_path().parent),
-                done_event=RpcEvent.create(),
             ))
             with console.status(f"[cyan]PCD[/]  {camera_id}", spinner="dots"):
-                pcd_res.done_event.wait()
-            pcd_res.done_event.delete()
-            pcd_res = cam.pcd.job_status(JobRequest(job_id=pcd_res.job_id))
+                pcd_res = wait_for_submission(cam.pcd, pcd_res)
             rprint("PCD", f"{camera_id} | {pcd_res.state}",
                     "green" if pcd_res.state == "succeeded" else "red")
 

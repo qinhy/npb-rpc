@@ -148,7 +148,7 @@ class PcdBuildResult(PcdBuildRequest):
     timing: PcdTiming = Field(default_factory=PcdTiming)
 
 
-@binary_schema("npb-rpc.pcd.job.status.response", version=1)
+@binary_schema("npb-rpc.pcd.job.status.response", version=2)
 class PcdJobStatusResponse(JobSnapshot[PcdBuildRequest, PcdBuildResult]):
     pass
 

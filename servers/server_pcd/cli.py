@@ -80,18 +80,20 @@ def print_status(status: PcdStatusResponse) -> None:
 
 
 def print_job_status(status: PcdJobStatusResponse) -> None:
+    request = status.request
+    result = status.result
     print(
         "job:",
         f"found={status.found}",
         f"id={status.job_id!r}",
         f"state={status.state!r}",
-        f"backend={status.backend!r}",
-        f"cuda_device={status.cuda_device}",
+        f"backend={request.backend if request else None!r}",
+        f"cuda_device={request.cuda_device if request else None}",
         f"cache_hit={status.cache_hit}",
-        f"points={status.point_count}",
-        f"segments={status.num_segments}",
-        f"total_ms={status.timing.total_ms:.3f}",
-        f"output={status.output_pcd_path!r}",
+        f"points={result.point_count if result else 0}",
+        f"segments={result.num_segments if result else 0}",
+        f"total_ms={result.timing.total_ms if result else 0:.3f}",
+        f"output={request.output_pcd_path if request else None!r}",
         f"error={status.error!r}",
     )
 
@@ -213,17 +215,18 @@ def run_client(args: argparse.Namespace, discovery: RedisDiscovery) -> None:
         return
 
     if args.build:
-        response = client.build(make_build_request(args))
+        request = make_build_request(args)
+        response = client.build(request)
         print(
             "submit:",
             f"accepted={response.accepted}",
             f"job_id={response.job_id!r}",
             f"state={response.state!r}",
-            f"rgb={response.rgb_jpg_path!r}",
-            f"left={response.left_jpg_path!r}",
-            f"right={response.right_jpg_path!r}",
-            f"pcd={response.output_pcd_path!r}",
-            f"json={response.output_json_path!r}",
+            f"rgb={request.rgb_jpg_path!r}",
+            f"left={request.left_jpg_path!r}",
+            f"right={request.right_jpg_path!r}",
+            f"pcd={request.output_pcd_path!r}",
+            f"json={request.output_json_path!r}",
             f"error={response.error!r}",
         )
         if response.accepted and args.wait:
@@ -285,6 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     add("--host", default="127.0.0.1")
     add("--endpoint", default=None)
     add("--advertise-endpoint")
+    add("--debug-errors", action="store_true", help="include exception messages in RPC errors (local debugging)")
     add("--registry", type=Path)
 
     # Server worker / filesystem
@@ -381,6 +385,7 @@ def main() -> None:
             service=args.service,
             instance_id=server_name,
             advertise_endpoint=args.advertise_endpoint,
+            debug_errors=args.debug_errors,
             worker_count=args.worker_count,
             queue_size=args.queue_size,
             job_ttl_s=args.job_ttl,
