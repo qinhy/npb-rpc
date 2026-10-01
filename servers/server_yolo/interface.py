@@ -16,6 +16,7 @@ from servers.msg.yolo import (
     YoloInferenceRequest,
     JobSubmitResponse,
     JobRequest,
+    YoloJobResultResponse,
     YoloJobStatusResponse,
     YoloStatusResponse,
 )
@@ -86,13 +87,13 @@ class YoloService(YoloInterface):
     def job_result(
         self,
         request: JobRequest,
-    ) -> JobResultResponse[YoloDetectResult]:
+    ) -> YoloJobResultResponse:
         """Return the full result when a job has succeeded."""
         try:
             return self.worker.job_result(request.job_id)
         except Exception as exc:
             self.log.exception("yolo.job_result failed")
-            return JobResultResponse[YoloDetectResult](
+            return YoloJobResultResponse(
                 found=False,
                 job_id=request.job_id,
                 error=f"job result error: {type(exc).__name__}: {exc}",

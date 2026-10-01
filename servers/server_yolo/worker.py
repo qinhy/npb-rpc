@@ -14,11 +14,11 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-from servers.msg.job import JobResultResponse
 from servers.msg.yolo import (
     YoloDetectResult,
     YoloInferenceRequest,
     JobSubmitResponse,
+    YoloJobResultResponse,
     YoloJobStatusResponse,
     YoloStatusResponse,
     YoloTiming,
@@ -492,12 +492,12 @@ class YoloWorker:
             error=snapshot.error,
         )
 
-    def job_result(self, job_id: str) -> JobResultResponse[YoloDetectResult]:
+    def job_result(self, job_id: str) -> YoloJobResultResponse:
         snapshot = self.store.snapshot(job_id)
         if snapshot is None:
-            return JobResultResponse[YoloDetectResult](found=False, job_id=job_id, error="job not found or expired")
+            return YoloJobResultResponse(found=False, job_id=job_id, error="job not found or expired")
 
-        return JobResultResponse[YoloDetectResult](
+        return YoloJobResultResponse(
             found=True,
             job_id=job_id,
             state=snapshot.state,

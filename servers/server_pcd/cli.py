@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 
 from npb_rpc.utils import resolve_service_instance
-from servers.msg.job import JobResultResponse
 
 try:
     import zmq
@@ -15,7 +14,7 @@ except ImportError:  # Only needed when checking ZeroMQ IPC capability.
 
 from npb_rpc import RedisDiscovery, portable_ipc, portable_tcp
 
-from servers.msg.pcd import PcdBuildResult, PcdClient, PcdInterface
+from servers.msg.pcd import PcdBuildResult, PcdClient, PcdInterface, PcdJobResultResponse
 from servers.msg.pcd import (
     EmptyRequest,
     PcdBuildRequest,
@@ -97,7 +96,7 @@ def print_job_status(status: PcdJobStatusResponse) -> None:
     )
 
 
-def print_job_result(response: JobResultResponse[PcdBuildResult], *, full: bool = False) -> None:
+def print_job_result(response: PcdJobResultResponse, *, full: bool = False) -> None:
     if not response.found:
         print("job not found:", f"id={response.job_id!r}", f"error={response.error!r}")
         return

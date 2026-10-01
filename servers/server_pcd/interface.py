@@ -15,7 +15,8 @@ from servers.msg.pcd import (
     EmptyRequest,
     PcdBuildRequest,
     JobSubmitResponse,
-    JobRequest
+    JobRequest,
+    PcdJobResultResponse
 )
 from servers.server_pcd.worker import PcdWorker
 
@@ -62,12 +63,12 @@ class PcdService(PcdInterface):
                 error=f"job status error: {type(exc).__name__}: {exc}",
             )
 
-    def job_result(self, request: JobRequest) -> JobResultResponse[PcdBuildResult]:
+    def job_result(self, request: JobRequest) -> PcdJobResultResponse:
         try:
             return self.worker.job_result(request.job_id)
         except Exception as exc:
             self.log.exception("pcd.job_result failed")
-            return JobResultResponse[PcdBuildResult](
+            return PcdJobResultResponse(
                 found=False,
                 job_id=request.job_id,
                 error=f"job result error: {type(exc).__name__}: {exc}",

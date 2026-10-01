@@ -15,7 +15,7 @@ except ImportError:  # Only needed for ZeroMQ IPC capability detection.
 
 from npb_rpc import RedisDiscovery, portable_ipc, portable_tcp
 
-from servers.msg.yolo import YoloClient, YoloDetectResult, YoloInterface
+from servers.msg.yolo import YoloClient, YoloDetectResult, YoloInterface, YoloJobResultResponse
 from servers.msg.yolo import EmptyRequest, YoloInferenceRequest, JobRequest, YoloStatusResponse, YoloJobStatusResponse
 from servers.server_yolo.server import run_server
 
@@ -89,7 +89,7 @@ def print_job_status(status:YoloJobStatusResponse) -> None:
     )
 
 
-def print_job_result(response:JobResultResponse[YoloDetectResult], *, full: bool = False) -> None:
+def print_job_result(response:YoloJobResultResponse, *, full: bool = False) -> None:
     if not response.found:
         print(f"job not found: {response.job_id!r}; error={response.error!r}")
         return
