@@ -191,11 +191,20 @@ def test_duplicate_server_is_rejected() -> None:
         Iceoryx2RpcServer.bind(endpoint)
 
 
-def test_message_limits_and_internal_errors() -> None:
+@pytest.mark.parametrize(
+    ("debug_errors", "expected_message"),
+    [
+        (False, "RPC handler failed (RuntimeError)"),
+        (True, "RuntimeError: private error"),
+    ],
+)
+def test_message_limits_and_internal_errors(debug_errors: bool, expected_message: str) -> None:
     from npb_rpc import RpcProtocolError
 
     endpoint = f"iceoryx2://npb-rpc-tests-{uuid.uuid4().hex}"
-    server = Iceoryx2RpcServer.bind(endpoint, max_message_bytes=140000)
+    server = Iceoryx2RpcServer.bind(
+        endpoint, max_message_bytes=140000, debug_errors=debug_errors
+    )
 
     @server.method("large", request=SumRequest, response=ArrayMessage)
     def large(request, rpc):
@@ -217,7 +226,7 @@ def test_message_limits_and_internal_errors() -> None:
         with pytest.raises(RemoteRpcError) as caught:
             client.call("broken", SumRequest(values=np.arange(3)), SumResponse)
         assert caught.value.status == Status.INTERNAL
-        assert caught.value.message == "RPC handler failed"
+        assert caught.value.message == expected_message
     finally:
         close_pair(server, client, thread)
 
