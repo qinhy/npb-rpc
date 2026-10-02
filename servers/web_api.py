@@ -191,7 +191,7 @@ class Client:
 
 
 def db_find_gnss_by_yolo(api:Client,db,start_jst,end_jst,
-                         class_name="weed",confidence=0.0):
+                         class_name="weed",confidence=0.0)->list:
     return api.db_find(db=db,
                         selector={
                             "_id": {"$gte": start_jst.replace(":",":field_all:"),
@@ -208,7 +208,7 @@ def db_find_gnss_by_yolo(api:Client,db,start_jst,end_jst,
 
 
 def db_find_pcds_by_yolo(api:Client,db,doc_id,
-                         class_name="weed",confidence=0.0):
+                         class_name="weed",confidence=0.0)->list:
     return api.db_find(db=db,
                         selector={
                             "_id": doc_id+":pcd:rgbd_hand",
@@ -281,7 +281,7 @@ if __name__ == "__main__":
 
     section("YOLO dual jobs")
     show("wait jobs", api.wait_jobs(yolo_jobs))
-    
+
     section("SEARCH DUAL")
     print(
         f"db    : {cap['db_name']}\n"
