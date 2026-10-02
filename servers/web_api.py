@@ -281,8 +281,8 @@ if __name__ == "__main__":
 
     section("YOLO dual jobs")
     show("wait jobs", api.wait_jobs(yolo_jobs))
+    
     section("SEARCH DUAL")
-
     print(
         f"db    : {cap['db_name']}\n"
         f"range : {start} -> {end}\n"
