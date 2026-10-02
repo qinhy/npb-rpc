@@ -66,6 +66,17 @@
         background: #444;
     }
 
+    #yoloPathInput {
+        width: min(720px, 55vw);
+        min-width: 320px;
+        background: #111;
+        color: #eee;
+        border: 1px solid #555;
+        border-radius: 4px;
+        padding: 5px 8px;
+        font-family: "Consolas", "Courier New", monospace;
+    }
+
     #confidence {
         width: 140px;
     }
@@ -223,6 +234,19 @@
 <div id="toolbar">
 
     <label>
+        YOLO path
+        <input
+            id="yoloPathInput"
+            type="text"
+            spellcheck="false"
+            placeholder="/db/...:yolo:... or /rgbd_hand/.../yolo/.../rgb.json"
+        >
+    </label>
+    <button id="loadPathButton">Load</button>
+
+    <div class="separator"></div>
+
+    <label>
         Record
         <select id="recordSelect"></select>
     </label>
@@ -318,6 +342,9 @@ const viewer = document.getElementById("viewer");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+const yoloPathInput = document.getElementById("yoloPathInput");
+const loadPathButton = document.getElementById("loadPathButton");
+
 const recordSelect = document.getElementById("recordSelect");
 const reloadButton = document.getElementById("reloadButton");
 const fitButton = document.getElementById("fitButton");
@@ -347,6 +374,11 @@ const jsonPanel = document.getElementById("jsonPanel");
 let records = [];
 let currentRecordIndex = -1;
 let currentData = null;
+
+// Optional direct-load mode from URL query parameters:
+//   ?yolo=/db/...&img=/db/.../rgb.jpg
+let directYoloUrl = null;
+let directImageUrl = null;
 
 let image = null;
 
@@ -419,6 +451,164 @@ function setStatus(text) {
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+}
+
+
+function resolveResourceUrl(value) {
+    if (!value) {
+        return null;
+    }
+
+    // Accept both absolute URLs and same-origin relative URLs.
+    return new URL(value, window.location.href).href;
+}
+
+
+function normalizeYoloInput(value) {
+    if (!value) {
+        return null;
+    }
+
+    const url = new URL(value, window.location.href);
+    const pathname = url.pathname;
+
+    // Already in DB API form:
+    //   /db/<db>/<record-id>:yolo:<camera>:<stream>
+    if (pathname.startsWith("/db/") && pathname.includes(":yolo:")) {
+        url.search = "";
+        url.hash = "";
+        return url.href;
+    }
+
+    // Shorthand filesystem-style form:
+    //   /<db>/<part1>/<part2>/.../yolo/<camera>/<stream>.json
+    //
+    // Example:
+    //   /rgbd_hand/2026-09-23/_field_all/161242.247810653JST/yolo/rgbd_hand/rgb.json
+    // ->
+    //   /db/rgbd_hand/2026-09-23:_field_all:161242.247810653JST:yolo:rgbd_hand:rgb
+    const parts = pathname.split("/").filter(Boolean);
+    const yoloIndex = parts.indexOf("yolo");
+
+    if (yoloIndex >= 2 && yoloIndex + 2 === parts.length - 1) {
+        const dbName = parts[0];
+        const recordParts = parts.slice(1, yoloIndex);
+        const camera = parts[yoloIndex + 1];
+        const stream = parts[yoloIndex + 2].replace(/\.json$/i, "");
+
+        if (!dbName || recordParts.length === 0 || !camera || !stream) {
+            throw new Error("Incomplete shorthand YOLO path.");
+        }
+
+        const recordId = recordParts.join(":");
+        url.pathname = `/db/${dbName}/${recordId}:yolo:${camera}:${stream}`;
+        url.search = "";
+        url.hash = "";
+        return url.href;
+    }
+
+    throw new Error(
+        "Expected '/db/...:yolo:<camera>:<stream>' or " +
+        "'/<db>/<record parts>/yolo/<camera>/<stream>.json'."
+    );
+}
+
+
+function deriveImageUrl(yoloValue) {
+    if (!yoloValue) {
+        return null;
+    }
+
+    const url = new URL(yoloValue, window.location.href);
+
+    // DB convention:
+    //   ...:yolo:<camera>:<stream>
+    // ->...:imgs:<camera>/<stream>.jpg
+    const match = url.pathname.match(/^(.*):yolo:([^/:]+):([^/:]+)$/);
+
+    if (!match) {
+        throw new Error(
+            "YOLO path must end with ':yolo:<camera>:<stream>'."
+        );
+    }
+
+    const [, base, camera, stream] = match;
+    url.pathname = `${base}:imgs:${camera}/${stream}.jpg`;
+    url.search = "";
+    url.hash = "";
+
+    return url.href;
+}
+
+
+function readDirectLoadArgs() {
+    const params = new URLSearchParams(window.location.search);
+    const rawYoloValue = params.get("yolo");
+
+    let yoloValue = rawYoloValue;
+    let yoloUrl = null;
+
+    if (rawYoloValue) {
+        try {
+            yoloUrl = normalizeYoloInput(rawYoloValue);
+            yoloValue = new URL(yoloUrl).pathname;
+        } catch (error) {
+            console.warn("Could not normalize YOLO URL parameter:", error);
+            yoloUrl = resolveResourceUrl(rawYoloValue);
+        }
+    }
+
+    return {
+        yoloValue,
+        yoloUrl,
+        imageUrl: resolveResourceUrl(params.get("img"))
+    };
+}
+
+
+function updateDirectLoadQuery(yoloValue, imageUrl) {
+    const url = new URL(window.location.href);
+
+    url.searchParams.set("yolo", yoloValue);
+    url.searchParams.set("img", imageUrl);
+
+    history.replaceState(null, "", url);
+}
+
+
+async function loadFromYoloInput() {
+    const yoloValue = yoloPathInput.value.trim();
+
+    if (!yoloValue) {
+        setStatus("Enter a YOLO path");
+        return;
+    }
+
+    try {
+        const yoloUrl = normalizeYoloInput(yoloValue);
+        const canonicalYoloValue = new URL(yoloUrl).pathname;
+        const imageUrl = deriveImageUrl(yoloUrl);
+
+        directYoloUrl = yoloUrl;
+        directImageUrl = imageUrl;
+
+        // Show and persist the canonical DB API path so reloads are stable.
+        yoloPathInput.value = canonicalYoloValue;
+        updateDirectLoadQuery(canonicalYoloValue, imageUrl);
+
+        await loadDirectRecord(
+            directYoloUrl,
+            directImageUrl
+        );
+    } catch (error) {
+        console.error(error);
+        setStatus("ERROR");
+        summaryElement.textContent =
+            `Failed to parse YOLO path:
+${yoloValue}
+
+${error.message}`;
+    }
 }
 
 
@@ -1176,6 +1366,7 @@ function updateSummary() {
 */
 
 async function loadRecords() {
+    recordSelect.disabled = false;
     setStatus("Loading records...");
 
     selectedDetectionIndex = -1;
@@ -1289,63 +1480,155 @@ async function loadYoloRecord(index) {
 }
 
 
-async function loadImage(path) {
-    image = null;
-    draw();
+async function loadDirectRecord(yoloUrl, imageUrl = null) {
+    setStatus("Loading YOLO URL...");
 
+    selectedDetectionIndex = -1;
+    hoveredDetectionIndex = -1;
+
+    try {
+        const response = await fetch(
+            yoloUrl,
+            {
+                cache: "no-store"
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error(
+                `YOLO HTTP ${response.status}: ${await response.text()}`
+            );
+        }
+
+        const record = await response.json();
+        currentData = unwrapRecord(record);
+
+        if (!currentData || typeof currentData !== "object") {
+            throw new Error("YOLO URL did not return a JSON object.");
+        }
+
+        // Keep the rest of the viewer working with the same state shape.
+        records = [record];
+        currentRecordIndex = 0;
+
+        recordSelect.innerHTML = "";
+
+        const option = document.createElement("option");
+        option.value = "0";
+        option.textContent = "URL args";
+        recordSelect.appendChild(option);
+        recordSelect.disabled = true;
+
+        jsonPanel.textContent =
+            "Click a detection to inspect it.";
+
+        updateSummary();
+        buildDetectionList();
+
+        summaryElement.textContent +=
+            `\n\nYOLO URL:\n${yoloUrl}`;
+
+        if (imageUrl) {
+            summaryElement.textContent +=
+                `\n\nImage URL:\n${imageUrl}`;
+
+            await loadImageUrl(imageUrl);
+        } else {
+            await loadImage(currentData?.input_jpg_path);
+        }
+
+    } catch (error) {
+        console.error(error);
+
+        image = null;
+        currentData = null;
+        detectionListElement.innerHTML = "";
+
+        setStatus("ERROR");
+
+        summaryElement.textContent =
+            `Failed to load YOLO URL:\n${yoloUrl}\n\n${error.message}`;
+
+        draw();
+    }
+}
+
+
+async function loadImage(path) {
     if (!path) {
+        image = null;
+        draw();
         setStatus("No input_jpg_path");
         return;
     }
 
-    setStatus("Loading image...");
-
     const url =
         `${API_GET_FILE}?path=${encodeURIComponent(path)}`;
 
-    const newImage = new Image();
+    await loadImageUrl(url);
+}
 
-    newImage.onload = () => {
-        image = newImage;
 
-        resizeCanvas();
-        fitImage();
+function loadImageUrl(url) {
+    image = null;
+    draw();
 
-        // Helpful sanity warning.
-        if (
-            currentData?.image_width &&
-            currentData?.image_height &&
-            (
-                currentData.image_width !== image.naturalWidth ||
-                currentData.image_height !== image.naturalHeight
-            )
-        ) {
-            console.warn(
-                "YOLO dimensions do not match actual image:",
-                {
-                    yolo: [
-                        currentData.image_width,
-                        currentData.image_height
-                    ],
-                    actual: [
-                        image.naturalWidth,
-                        image.naturalHeight
-                    ]
-                }
-            );
-        }
-    };
+    if (!url) {
+        setStatus("No image URL");
+        return Promise.resolve();
+    }
 
-    newImage.onerror = error => {
-        console.error("Image load failed", error);
+    setStatus("Loading image...");
 
-        setStatus("Image load failed");
+    return new Promise(resolve => {
+        const newImage = new Image();
 
-        summaryElement.textContent +=
-            `\n\nIMAGE LOAD FAILED:\n${url}`;
-    };
+        newImage.onload = () => {
+            image = newImage;
 
-    newImage.src = url;
+            resizeCanvas();
+            fitImage();
+
+            // Helpful sanity warning.
+            if (
+                currentData?.image_width &&
+                currentData?.image_height &&
+                (
+                    currentData.image_width !== image.naturalWidth ||
+                    currentData.image_height !== image.naturalHeight
+                )
+            ) {
+                console.warn(
+                    "YOLO dimensions do not match actual image:",
+                    {
+                        yolo: [
+                            currentData.image_width,
+                            currentData.image_height
+                        ],
+                        actual: [
+                            image.naturalWidth,
+                            image.naturalHeight
+                        ]
+                    }
+                );
+            }
+
+            resolve();
+        };
+
+        newImage.onerror = error => {
+            console.error("Image load failed", error);
+
+            setStatus("Image load failed");
+
+            summaryElement.textContent +=
+                `\n\nIMAGE LOAD FAILED:\n${url}`;
+
+            resolve();
+        };
+
+        newImage.src = url;
+    });
 }
 
 
@@ -1355,6 +1638,19 @@ async function loadImage(path) {
 |--------------------------------------------------------------------------
 */
 
+loadPathButton.addEventListener("click", async () => {
+    await loadFromYoloInput();
+});
+
+
+yoloPathInput.addEventListener("keydown", async event => {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        await loadFromYoloInput();
+    }
+});
+
+
 recordSelect.addEventListener("change", async () => {
     await loadYoloRecord(
         Number(recordSelect.value)
@@ -1363,7 +1659,14 @@ recordSelect.addEventListener("change", async () => {
 
 
 reloadButton.addEventListener("click", async () => {
-    await loadRecords();
+    if (directYoloUrl) {
+        await loadDirectRecord(
+            directYoloUrl,
+            directImageUrl
+        );
+    } else {
+        await loadRecords();
+    }
 });
 
 
@@ -1445,7 +1748,34 @@ confidenceValue.textContent =
     Number(confidenceSlider.value).toFixed(2);
 
 resizeCanvas();
-loadRecords();
+
+const directArgs = readDirectLoadArgs();
+
+yoloPathInput.value = directArgs.yoloValue ?? "";
+directYoloUrl = directArgs.yoloUrl;
+directImageUrl = directArgs.imageUrl;
+
+if (directYoloUrl && !directImageUrl) {
+    try {
+        directImageUrl = deriveImageUrl(directArgs.yoloValue);
+    } catch (error) {
+        console.warn("Could not derive image URL from YOLO URL:", error);
+    }
+}
+
+if (directYoloUrl) {
+    loadDirectRecord(
+        directYoloUrl,
+        directImageUrl
+    );
+} else if (directImageUrl) {
+    setStatus("ERROR");
+    recordSelect.disabled = true;
+    summaryElement.textContent =
+        "The 'img' URL parameter requires a 'yolo' URL parameter.";
+} else {
+    loadRecords();
+}
 
 </script>
 
