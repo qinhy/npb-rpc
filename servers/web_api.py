@@ -253,7 +253,7 @@ if __name__ == "__main__":
     section("HAND CAMERA")
     cap = api.capture_hand(meta={
         "gnss": {
-            "the_data": "xxxxxxxxx",
+            "fix": "xxxxxxxxx",
         },
         "arm": {
             "run_id": "UUIDXXXX",
