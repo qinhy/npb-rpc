@@ -10,6 +10,7 @@ from typing import Any, Iterator
 
 import cv2
 import numpy as np
+import torch
 from ultralytics import YOLO
 
 from servers.msg.yolo import (
@@ -28,9 +29,11 @@ from servers.server_yolo.yolo_utils import (
     make_tiles,
     normalize_root,
     precision_args,
-    read_jpeg,
+    prepare_yolo_batch,
+    read_jpeg_tensor,
     resolve_path,
     write_json_atomic,
+    torch_device,
     yolo_device,
 )
 
@@ -136,8 +139,8 @@ class UltralyticsYoloDetector:
 
         # Preprocess
         t0 = time.perf_counter()
-        image = read_jpeg(input_path)
-        image_h, image_w = image.shape[:2]
+        image = read_jpeg_tensor(input_path, torch_device(request))
+        image_h, image_w = int(image.shape[-2]), int(image.shape[-1])
 
         roi_box = effective_roi(request.detection_bbox_xyxy, image_w, image_h)
         if roi_box is None:
@@ -147,8 +150,8 @@ class UltralyticsYoloDetector:
             roi_left, roi_top, roi_right, roi_bottom = roi_box
             effective_roi_box = [roi_left, roi_top, roi_right, roi_bottom]
 
-        roi = image[roi_top:roi_bottom, roi_left:roi_right]
-        if roi.size == 0:
+        roi = image[:, roi_top:roi_bottom, roi_left:roi_right]
+        if roi.numel() == 0:
             raise ValueError("detection ROI is empty after clipping to image bounds")
 
         tile_size: int | None = None
@@ -158,6 +161,11 @@ class UltralyticsYoloDetector:
 
         if request.size_mode == "tiling":
             tile_size = make_divisible(request.imgsz, request.stride)
+            if tile_size != request.imgsz:
+                raise ValueError(
+                    f"imgsz={request.imgsz} must be divisible by stride={request.stride} "
+                    "because tensor input is not resized or letterboxed"
+                )
             effective_tile_overlap = request.tile_overlap
             tiles = make_tiles(
                 roi,
@@ -176,7 +184,8 @@ class UltralyticsYoloDetector:
 
         if request.size_mode == "resize":
             t0 = time.perf_counter()
-            results = self._predict(model, np.ascontiguousarray(roi), request, request.imgsz)
+            source = prepare_yolo_batch([roi], imgsz=request.imgsz, half=request.half)
+            results = self._predict(model, source, request, request.imgsz)
             inference_ms += (time.perf_counter() - t0) * 1000.0
 
             if len(results) != 1:
@@ -188,17 +197,21 @@ class UltralyticsYoloDetector:
                     request=request,
                     origin_x=roi_left,
                     origin_y=roi_top,
-                    source_shape=roi.shape[:2],
+                    source_shape=(int(roi.shape[-2]), int(roi.shape[-1])),
                     tile=None,
                 )
             )
         else:
             for start in range(0, len(tiles), request.tile_batch_size):
                 batch = tiles[start:start + request.tile_batch_size]
-                sources = [np.ascontiguousarray(item.image) for item in batch]
+                source = prepare_yolo_batch(
+                    [item.image for item in batch],
+                    imgsz=tile_size or request.imgsz,
+                    half=request.half,
+                )
 
                 t0 = time.perf_counter()
-                results = self._predict(model, sources, request, tile_size or request.imgsz)
+                results = self._predict(model, source, request, tile_size or request.imgsz)
                 inference_ms += (time.perf_counter() - t0) * 1000.0
 
                 if len(results) != len(batch):
@@ -211,7 +224,7 @@ class UltralyticsYoloDetector:
                             request=request,
                             origin_x=item.tile.left,
                             origin_y=item.tile.top,
-                            source_shape=item.image.shape[:2],
+                            source_shape=(int(item.image.shape[-2]), int(item.image.shape[-1])),
                             tile=item.tile,
                         )
                     )
@@ -280,7 +293,7 @@ class UltralyticsYoloDetector:
     def _predict(
         self,
         model: YOLO,
-        source: np.ndarray | list[np.ndarray],
+        source: torch.Tensor,
         request: YoloInferenceRequest,
         imgsz: int,
     ) -> list[Any]:

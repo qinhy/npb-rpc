@@ -183,16 +183,6 @@ if __name__ == "__main__":
 
     class_name, confidence = "person", 0.01
     api = Client(url="http://127.0.0.1:8000")
-    section("INITIALIZE")
-    show("refresh",    api.refresh())
-    show("yolo model", api.yolo_set_model({
-        "model_name": "yolo11l-seg.pt",
-        "confidence":0.25,
-    }))
-    show("pcd backend",api.pcd_set_backend({
-        "backend": "sgbm",
-        "max_depth_m": 2.0,
-    }))
 
     section("DUAL CAMERA")
     show("close cams", api.close_cams())
@@ -227,7 +217,7 @@ if __name__ == "__main__":
 
     section("HAND CAMERA")
     show("close cams", api.close_cams())
-    show("open hand", api.open_hand())
+    show("open hand",  api.open_hand())
 
     section("YOLO dual jobs")
     show("wait jobs", api.wait_jobs(yolo_jobs))
@@ -251,17 +241,18 @@ if __name__ == "__main__":
     show("result", result)
 
     section("HAND CAMERA")
-    cap = api.capture_hand(meta={
-        "gnss": {
-            "fix": "xxxxxxxxx",
-        },
-        "arm": {
-            "run_id": "UUIDXXXX",
-            "data": {
-                "pose": "xxxxxxxxx",
+    for i in range(2):
+        cap = api.capture_hand(meta={
+            "gnss": {
+                "fix": "xxxxxxxxx",
             },
-        },
-    })
+            "arm": {
+                "run_id": "UUIDXXXX",
+                "data": {
+                    "pose": "xxxxxxxxx",
+                },
+            },
+        })
     show("capture hand", cap)
 
     section("SEARCH HAND")

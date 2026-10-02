@@ -26,6 +26,7 @@ from servers.server_rpc import (STORE, CameraPipelineConfig, RGBD_hand, RGBD_lef
 from servers.server_yolo.interface import add_yolo_routes
 from servers.msg.pcd import PcdBackend, PcdBuildRequest, PcdInterface
 from servers.server_pcd.interface import add_pcd_routes
+from servers.server_yolo.yolo_utils import is_official_model_name
 from servers.store.custom_record_store import CustomStore, PCDRecord
 from servers.store.fs_nosql import FileSystemDB
 
@@ -454,6 +455,24 @@ for name in ("numpy", "cv2", "torch", "torchvision", "cupy", "ultralytics", "dep
         print(f"[WARMUP] Continuing without completed warmup: {exc}", flush=True)
 
 if __name__ == "__main__":
+    try:
+        import vpi # for jetson
+        GLOBAL_pcd_config.backend = PcdBackend.from_str("vpi")
+        rprint("PCD","use vpi")
+    except Exception as e:
+        GLOBAL_pcd_config.backend = PcdBackend.from_str("cuda")
+        rprint("PCD","use cuda")
+        pass
+
+    all_pt = set([f.name for f in list(Path("./").rglob("*.pt"))])
+    official_pt = set([pt for pt in all_pt if is_official_model_name(pt)])
+    unofficial_pt = all_pt-official_pt
+    GLOBAL_yolo_config.model_name = list(official_pt)[0]
+    GLOBAL_yolo_config.confidence = 0.25
+    if len(unofficial_pt)>0:
+        GLOBAL_yolo_config.model_name = list(unofficial_pt)[0]
+    rprint("YOLO",f"use {GLOBAL_yolo_config.model_name}")
+
     env = os.environ.copy()
     env["LOG_REDIS_URL"] = "redis://127.0.0.1:6379/0"
     warmup(env)

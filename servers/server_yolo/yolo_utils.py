@@ -9,6 +9,12 @@ from typing import Any
 
 import cv2
 import numpy as np
+import torch
+from torchvision.io import ImageReadMode, decode_jpeg, read_file
+from ultralytics.utils.downloads import (
+    GITHUB_ASSETS_NAMES,
+    GITHUB_ASSETS_STEMS,
+)
 
 try:
     from ultralytics.cfg import DEFAULT_CFG_DICT
@@ -48,7 +54,7 @@ class Candidate:
 
 @dataclass(frozen=True)
 class TileInput:
-    image: np.ndarray
+    image: np.ndarray | torch.Tensor
     tile: YoloTile
 
 
@@ -69,6 +75,37 @@ def read_jpeg(path: Path) -> np.ndarray:
     if image is None:
         raise ValueError(f"failed to decode JPEG: {path}")
     return image
+
+
+def read_jpeg_tensor(path: Path, device: torch.device | str) -> torch.Tensor:
+    """Decode JPEG to CHW RGB uint8 directly on *device* when supported."""
+    if path.suffix.lower() not in {".jpg", ".jpeg"}:
+        raise ValueError(f"input image must be JPEG: {path}")
+
+    device = torch.device(device)
+    encoded = read_file(str(path))
+    if encoded.numel() == 0:
+        raise ValueError(f"input JPEG is empty: {path}")
+
+    try:
+        image = decode_jpeg(
+            encoded,
+            mode=ImageReadMode.RGB,
+            device=device,
+        )
+    except RuntimeError:
+        if device.type != "cuda":
+            raise
+        # Some torchvision builds do not include CUDA/nvJPEG support.
+        image = decode_jpeg(
+            encoded,
+            mode=ImageReadMode.RGB,
+            device="cpu",
+        ).to(device, non_blocking=True)
+
+    if image.ndim != 3 or image.shape[0] != 3:
+        raise ValueError(f"expected decoded RGB CHW image, got shape={tuple(image.shape)}")
+    return image.contiguous()
 
 
 def effective_roi(
@@ -110,14 +147,21 @@ def axis_positions(length: int, tile_size: int, overlap: int) -> list[int]:
 
 
 def make_tiles(
-    image: np.ndarray,
+    image: np.ndarray | torch.Tensor,
     *,
     origin_x: int,
     origin_y: int,
     tile_size: int,
     overlap: int,
 ) -> list[TileInput]:
-    height, width = image.shape[:2]
+    """Tile either HWC NumPy images or CHW Torch tensors without copying."""
+    if isinstance(image, torch.Tensor):
+        if image.ndim != 3:
+            raise ValueError(f"expected CHW tensor, got shape={tuple(image.shape)}")
+        height, width = int(image.shape[-2]), int(image.shape[-1])
+    else:
+        height, width = image.shape[:2]
+
     xs = axis_positions(width, tile_size, overlap)
     ys = axis_positions(height, tile_size, overlap)
 
@@ -126,9 +170,14 @@ def make_tiles(
         for x in xs:
             right = min(x + tile_size, width)
             bottom = min(y + tile_size, height)
+            tile_image = (
+                image[:, y:bottom, x:right]
+                if isinstance(image, torch.Tensor)
+                else image[y:bottom, x:right]
+            )
             tiles.append(
                 TileInput(
-                    image=image[y:bottom, x:right],
+                    image=tile_image,
                     tile=YoloTile(
                         left=origin_x + x,
                         top=origin_y + y,
@@ -140,6 +189,33 @@ def make_tiles(
     return tiles
 
 
+def prepare_yolo_batch(
+    images: list[torch.Tensor],
+    *,
+    imgsz: int,
+    half: bool,
+) -> torch.Tensor:
+    """Stack exact-size CHW RGB uint8 images into normalized BCHW input.
+
+    No resize or letterbox is performed. Every image must already be imgsz x imgsz.
+    """
+    if not images:
+        raise ValueError("YOLO input batch is empty")
+
+    for image in images:
+        if image.ndim != 3 or image.shape[0] != 3:
+            raise ValueError(f"expected CHW RGB tensor, got shape={tuple(image.shape)}")
+        shape = (int(image.shape[-2]), int(image.shape[-1]))
+        if shape != (imgsz, imgsz):
+            raise ValueError(
+                f"YOLO tensor input must already be {imgsz}x{imgsz}; got {shape[1]}x{shape[0]}"
+            )
+
+    batch = torch.stack(images, dim=0)
+    dtype = torch.float16 if half and batch.is_cuda else torch.float32
+    return batch.to(dtype=dtype).div_(255.0).contiguous()
+
+
 # ============================================================
 # Ultralytics request helpers
 # ============================================================
@@ -147,6 +223,16 @@ def make_tiles(
 
 def yolo_device(request: YoloInferenceRequest) -> str:
     return "cpu" if request.cuda_device < 0 else f"cuda:{request.cuda_device}"
+
+
+def torch_device(request: YoloInferenceRequest) -> torch.device:
+    if request.cuda_device < 0:
+        return torch.device("cpu")
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            f"cuda_device={request.cuda_device} was requested but CUDA is not available"
+        )
+    return torch.device(f"cuda:{request.cuda_device}")
 
 
 def precision_args(request: YoloInferenceRequest) -> dict[str, Any]:
@@ -425,3 +511,55 @@ def write_json_atomic(output_path: Path, result: Any, job_id: str) -> None:
     finally:
         with suppress(FileNotFoundError):
             temporary.unlink()
+
+
+def official_model_name(value: str) -> str | None:
+    """Return normalized official Ultralytics .pt model name, or None.
+
+    Accepts:
+        yolo26n.pt
+        yolo26n
+
+    Rejects:
+        /models/yolo26n.pt
+        ./yolo26n.pt
+        best.pt
+        abc.pt
+        https://...
+        non-.pt Ultralytics assets
+    """
+    if not isinstance(value, str):
+        return None
+
+    value = value.strip()
+    if not value:
+        return None
+
+    path = Path(value)
+
+    # Official model name only -- paths/URLs are not names.
+    if path.name != value:
+        return None
+
+    # Exact official checkpoint filename.
+    if value.endswith(".pt"):
+        return value if value in GITHUB_ASSETS_NAMES else None
+
+    # Allow shorthand such as "yolo26n".
+    if not path.suffix and value in GITHUB_ASSETS_STEMS:
+        name = f"{value}.pt"
+        return name if name in GITHUB_ASSETS_NAMES else None
+
+    return None
+
+
+def is_official_model_name(value: str) -> bool:
+    return official_model_name(value) is not None
+
+
+def check_official_model_name(value: str) -> str:
+    """Return normalized name or raise ValueError."""
+    name = official_model_name(value)
+    if name is None:
+        raise ValueError(f"not an official Ultralytics model name: {value!r}")
+    return name
