@@ -53,14 +53,9 @@ class Client:
     def job_wait_event(self,json):
         return self._call("POST", "/job/wait",json=json)
     
-    def job_delete_event(self,json):
-        return self._call("POST", "/job/delete",json=json)
-
     def wait_jobs(self,jobs:list):
         if len(jobs)==0:return
-        last_yolo_job = jobs.pop()
-        api.job_wait_event(last_yolo_job["done_event"])
-        for job in jobs:api.job_delete_event(job["done_event"])
+        for job in jobs:api.job_wait_event(job["done_event"])
     
     def open_dual_rgb(self,json={
             "rgb_size": [3872,3008],

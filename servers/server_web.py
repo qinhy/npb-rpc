@@ -376,15 +376,6 @@ def job_wait(event:RpcEvent):
     except Exception as e:
         print("warning",e)
 
-def job_delete(event:RpcEvent):
-    try:
-        if event.exists():
-            event.delete()
-    except Exception as e:
-        print("warning",e)
-
-app.add_api_route("/job/delete",
-                  job_delete, methods=["POST"], tags=["db"])
 app.add_api_route("/job/wait",
                   job_wait, methods=["POST"], tags=["db"])
 
@@ -429,5 +420,4 @@ app.add_api_route("/controllers/pcd/set_backend", # Select SGBM/DNN PCD backend 
 
 if __name__ == "__main__":
     refresh_routes()
-    RpcEvent.create().delete()
     uvicorn.run(app, host="0.0.0.0", port=8000)

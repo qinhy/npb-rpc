@@ -607,6 +607,7 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
     manifest: list[dict[str, Any]] = []
 
     LOG.info(f"saving to dir {output_dir}")
+    filenames = []
 
     for detection_index, detection in detections:
         mask = detection_mask(detection, rgb_h, rgb_w)
@@ -645,7 +646,7 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
             "point_count": count,
             "pcd": filename,
         })
-        LOG.info(f"saved {filename}")
+        filenames.append(filename)
 
     if save_background:
         background = ~(claimed if exclusive else union)
@@ -658,12 +659,16 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
                 colors_rgb[background],
                 binary=binary_pcd,
             )
-            LOG.info(f"saved background")
+            # LOG.info(f"saved background")
+            filenames.append(filename)
 
     if save_full_cloud:
-        save_pcd(output_dir / "full.pcd", points_left, colors_rgb, binary=binary_pcd)
-        LOG.info(f"saved {'full.pcd'} ({len(points_left)} points)")
+        filename = f"full.pcd"
+        save_pcd(output_dir / filename, points_left, colors_rgb, binary=binary_pcd)
+        LOG.info(f"saved {filename} ({len(points_left)} points)")
+        filenames.append(filename)
 
+    LOG.info(f"saved {filenames}")
     return manifest
 
 
