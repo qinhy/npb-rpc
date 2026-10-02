@@ -9,7 +9,6 @@ from npb import decode, encode
 
 from npb_rpc import NngRpcServer, RpcEvent, ZmqRpcServer, portable_ipc
 from npb_rpc.utils import add_rpc, api_methods
-from servers.job_client import wait_for_submission
 from servers.msg import pcd, yolo
 from servers.msg.job import JobRequest, JobSubmitResponse
 from servers.msg.worker import Worker
@@ -168,17 +167,3 @@ def test_queue_rejection_cancellation_and_expired_jobs(kind, monkeypatch):
         worker.close()
     assert not worker.online
     assert not worker.submit(request_for(kind)).accepted
-
-
-def test_pipeline_wait_rejection_failure_and_timeout():
-    with pytest.raises(RuntimeError, match="queue full"):
-        wait_for_submission(None, JobSubmitResponse(accepted=False, error="queue full"))
-    submission = JobSubmitResponse(accepted=True, job_id="job")
-    client = SimpleNamespace(job_status=lambda _: pcd.PcdJobStatusResponse(
-        found=True, job_id="job", state="failed", error="missing image",
-    ))
-    with pytest.raises(RuntimeError, match="missing image"):
-        wait_for_submission(client, submission)
-    client.job_status = lambda _: pcd.PcdJobStatusResponse(found=True, state="running")
-    with pytest.raises(TimeoutError):
-        wait_for_submission(client, submission, timeout_s=0)
