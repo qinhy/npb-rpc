@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from ._base import RpcClient, RpcServer
 from ._discovery import BackendName, DiscoveryBackend, ServiceRecord, validate_service_name
 from ._iceoryx2 import Iceoryx2RpcClient, Iceoryx2RpcServer
 from ._nng import NngRpcClient, NngRpcServer
@@ -22,7 +23,6 @@ from ._zmq import ZmqRpcClient, ZmqRpcServer
 
 RequestT = TypeVar("RequestT", bound=BaseModel)
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
-RpcServer = ZmqRpcServer | NngRpcServer | Iceoryx2RpcServer
 
 logger = logging.getLogger(__name__)
 
@@ -211,11 +211,12 @@ class DiscoveredRpcClient:
         validate_service_name(service)
         record = self.discovery.resolve(service)
         options = self.backend_options.get(record.backend, {})
-        client_type = {
+        client_types: dict[BackendName, type[RpcClient]] = {
             "zmq": ZmqRpcClient,
             "nng": NngRpcClient,
             "iceoryx2": Iceoryx2RpcClient,
-        }[record.backend]
+        }
+        client_type = client_types[record.backend]
         with client_type.connect(record.endpoint, **options) as client:
             return client.call(
                 method,

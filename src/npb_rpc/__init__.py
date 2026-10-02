@@ -1,5 +1,6 @@
 """Typed RPC for Pydantic and NumPy payloads using NPB."""
 
+from ._base import RpcClient, RpcServer
 from ._discovery import (
     BackendName,
     DiscoveryBackend,
