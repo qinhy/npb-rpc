@@ -4,11 +4,9 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from servers.logger import logging
 from pathlib import Path
-from queue import Queue
 import threading
 import time
 from typing import Any, Iterator
-import uuid
 
 import cv2
 import numpy as np
@@ -17,10 +15,6 @@ from ultralytics import YOLO
 from servers.msg.yolo import (
     YoloDetectResult,
     YoloInferenceRequest,
-    JobSubmitResponse,
-    YoloJobResultResponse,
-    YoloJobStatusResponse,
-    YoloStatusResponse,
     YoloTiming,
 )
 from servers.server_yolo.yolo_utils import (
@@ -40,7 +34,6 @@ from servers.server_yolo.yolo_utils import (
     yolo_device,
 )
 
-from servers.msg.worker import JobStore
 from servers.msg.worker import Worker
 
 LOG = logging.getLogger(__name__.replace(".",":"))
@@ -304,7 +297,38 @@ class UltralyticsYoloDetector:
             "verbose": False,
         }
         kwargs.update(precision_args(request))
-        return list(model.predict(**kwargs))
+        results = list(model.predict(**kwargs))
+        return results
+
+        ### only for debug ###
+        LOG.info(
+            "YOLO request: half=%s cuda_device=%s device=%s precision=%s",
+            request.half,request.cuda_device,kwargs["device"],
+            precision_args(request),)
+        # Actual inference predictor/backend
+        predictor = model.predictor
+        backend = predictor.model
+        LOG.info(
+            "YOLO actual backend: quantize=%s fp16=%s device=%s",
+            getattr(predictor.args, "quantize", None),
+            getattr(backend, "fp16", None),
+            getattr(backend, "device", None),
+        )
+
+        # Actual inference model weight dtype
+        torch_model = getattr(backend, "model", None)
+        if torch_model is not None:
+            try:
+                p = next(torch_model.parameters())
+                LOG.info(
+                    "YOLO actual weight: dtype=%s device=%s",
+                    p.dtype,
+                    p.device,
+                )
+            except (StopIteration, AttributeError):
+                pass
+
+        return results
 
     def _extract_candidates(
         self,
@@ -364,8 +388,6 @@ class UltralyticsYoloDetector:
 # ============================================================
 # Async worker façade
 # ============================================================
-
-
 
 
 class YoloWorker(
@@ -468,3 +490,4 @@ class YoloWorker(
         )
 
         return path
+
