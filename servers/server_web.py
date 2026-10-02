@@ -178,13 +178,14 @@ def capture_cams(store:CustomStore=STORE,
         cam.fs = cam.cli.frames(CameraFrameSetRequest())
         cam.cam_cap_ms = (time.perf_counter() - t0) * 1000.0
         
-    if "meta" in params and "gnss" in params["meta"]:
-        record.add_gnss(params["meta"]["gnss"])
+    if "meta" in params:
+        if "gnss" in params["meta"]:
+            record.add_gnss(params["meta"]["gnss"])
+        if "arm" in params["meta"]:
+            arm = record.get_arm()
+            arm.add_result(run_id=params["meta"]["arm"]["run_id"],
+                        data=params["meta"]["arm"]["data"])
 
-    if "meta" in params and "arm" in params["meta"]:
-        arm = record.get_arm()
-        arm.add_result(run_id=params["meta"]["arm"]["run_id"],
-                       data=params["meta"]["arm"]["data"])
     yolo_jobs = []
     for cam in cams:
         t0 = time.perf_counter()

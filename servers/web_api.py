@@ -6,28 +6,18 @@ import time
 from datetime import datetime, timezone, timedelta
 
 
-class ApiError(RuntimeError):
-    pass
-
-
 class Client:
     CAMERAS = {"rgbd_left", "rgbd_right", "rgbd_hand"}
     DBS = {"dual_rgb", "rgbd_hand"}
-    DONE = {"succeeded", "failed", "cancelled"}
 
     def __init__(self, url="http://127.0.0.1:8000", timeout=60):
         self.url = url.rstrip("/")
         self.timeout = timeout
         self.s = requests.Session()
 
-    def close(self):
-        self.s.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        self.close()
+    def close(self): self.s.close()
+    def __enter__(self): return self
+    def __exit__(self, *_): self.close()
 
     def _call(self, method, path, *, raw=False, **kwargs):
         r = self.s.request(method, self.url + path, timeout=self.timeout, **kwargs)
@@ -36,7 +26,7 @@ class Client:
                 detail = r.json()
             except Exception:
                 detail = r.text
-            raise ApiError(f"{method} {path} -> {r.status_code}: {detail}")
+            raise RuntimeError(f"{method} {path} -> {r.status_code}: {detail}")
         if raw:
             return r.content
         return r.json() if r.content else None
@@ -65,7 +55,7 @@ class Client:
             "stereo_size": [1280,800],
             "mjpeg_quality": 95,"fps": 10,
             "max_exposure_us": 16667,
-            "timeout_s": 20
+            "timeout_s": 50
         }):
         self._call("POST", "/open_dual_rgb", json=json)
         return "ok"
@@ -75,7 +65,7 @@ class Client:
             "stereo_size": [1280,800],
             "mjpeg_quality": 95,"fps": 10,
             "max_exposure_us": 16667,
-            "timeout_s": 20
+            "timeout_s": 50
         }):
         self._call("POST", "/open_hand", json=json)
         return "ok"
