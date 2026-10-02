@@ -1,4 +1,6 @@
 from __future__ import annotations
+import io
+import numpy as np
 import requests
 import time
 from datetime import datetime, timezone, timedelta
@@ -104,6 +106,64 @@ class Client:
     def db_attachment(self, db, doc_id, name):
         self._check(db, self.DBS)
         return self._call("GET", f"/db/{db}/{doc_id}/{name}", raw=True)
+
+    def db_read_pcd(self, db, doc_id, name:str):
+        if not name.endswith(".pcd"):return None
+
+        raw = self.db_attachment(db, doc_id, name)
+
+        marker_binary = b"DATA binary\n"
+        marker_ascii = b"DATA ascii\n"
+
+        if marker_binary in raw:
+            header_raw, payload = raw.split(marker_binary, 1)
+            binary = True
+
+        elif marker_ascii in raw:
+            header_raw, payload = raw.split(marker_ascii, 1)
+            binary = False
+
+        else:
+            raise ValueError("Invalid PCD: DATA binary/ascii not found")
+
+        header = header_raw.decode("ascii")
+
+        # Get POINTS count
+        n = None
+        for line in header.splitlines():
+            if line.startswith("POINTS "):
+                n = int(line.split()[1])
+                break
+
+        if n is None:
+            raise ValueError("Invalid PCD: POINTS missing")
+
+        if binary:
+            dtype = np.dtype([
+                ("x", "<f4"),("y", "<f4"),("z", "<f4"),
+                ("rgb", "<f4"),
+            ])
+            arr = np.frombuffer(payload, dtype=dtype, count=n)
+            points = np.column_stack([
+                arr["x"], arr["y"], arr["z"],
+            ])
+            rgb_u32 = arr["rgb"].view("<u4")
+        else:
+            arr = np.loadtxt(io.BytesIO(payload), dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr[None, :]
+            points = arr[:, :3]
+            # Preserve the underlying float32 bit representation.
+            rgb_f32 = arr[:, 3].astype("<f4", copy=False)
+            rgb_u32 = rgb_f32.view("<u4")
+
+        colors = np.column_stack([
+            (rgb_u32 >> 16) & 0xFF,
+            (rgb_u32 >> 8) & 0xFF,
+            rgb_u32 & 0xFF,
+        ]).astype(np.uint8)
+
+        return points, colors
 
     def db_add_arm(self, db, doc_id, run_id, data, kind="arm_result"):
         self._check(db, self.DBS)
@@ -271,6 +331,9 @@ if __name__ == "__main__":
         confidence,
     )
     show("result", result)
+
+    if len(result)>0:
+        points, colors = api.db_read_pcd(cap["db_name"],result[0]["_id"],"full.pcd")
 
     section("ADD ARM DATA")
     show(
