@@ -38,6 +38,40 @@ DEALER client                         ROUTER server
 The envelope carries method, request ID, deadline, metadata, and status. The
 NPB frame remains a transport-independent typed body.
 
+## Shared transport interfaces
+
+`RpcClient` and `RpcServer` are public abstract base classes implemented by
+all three transports. Use them in application type annotations to keep code
+independent of the selected backend:
+
+```python
+from npb_rpc import RpcClient, RpcContext, RpcServer
+
+
+def register_sum(server: RpcServer) -> None:
+    @server.method("array.sum", request=SumRequest, response=SumResponse)
+    def array_sum(request: SumRequest, context: RpcContext) -> SumResponse:
+        return SumResponse(total=float(request.values.sum()))
+
+
+def sum_values(client: RpcClient, request: SumRequest) -> SumResponse:
+    return client.call("array.sum", request, SumResponse)
+```
+
+The example uses the models defined below. Create concrete transports with
+`NngRpcClient.connect(...)`, `ZmqRpcServer.bind(...)`, or the corresponding
+backend class. Constructors and their options remain backend-specific.
+Both interfaces provide `closed`, `close()`, and context-manager support.
+`RpcServer` also defines registration, protocol capabilities, and serving methods.
+
+To implement another transport, subclass these interfaces, implement their
+abstract methods, and initialize `endpoint` and `_closed`. Server subclasses
+call `super().__init__()` for an independent method registry. The common code
+handles registration validation, decorators, and context-manager cleanup;
+transport code owns I/O and synchronization. `Iceoryx2RpcClient.call_borrowed()`
+remains an iceoryx2-specific extension. Discovery currently supports the three
+built-in backend identities.
+
 ## Example
 
 Shared models:

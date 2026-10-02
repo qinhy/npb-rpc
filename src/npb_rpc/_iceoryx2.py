@@ -6,16 +6,15 @@ import ctypes
 import math
 import threading
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Self, TypeVar
 from uuid import uuid4
 
 import numpy as np
 from npb import BlobStore, NPBError, decode, encode, encoded_size
 from pydantic import BaseModel, ValidationError
 
+from ._base import RpcClient, RpcServer
 from ._errors import (
     RemoteRpcError,
     RpcAbort,
@@ -37,7 +36,6 @@ from ._protocol import (
 
 RequestT = TypeVar("RequestT", bound=BaseModel)
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
-Handler = Callable[[BaseModel, RpcContext], BaseModel]
 WaitStrategy = Literal["sleep", "yield", "spin", "hybrid"]
 
 _WAIT_STRATEGIES = frozenset({"sleep", "yield", "spin", "hybrid"})
@@ -349,7 +347,7 @@ class Iceoryx2BorrowedResponse(Generic[ResponseT]):
         self.close()
 
 
-class Iceoryx2RpcClient:
+class Iceoryx2RpcClient(RpcClient):
     """A thread-safe synchronous typed RPC client using iceoryx2 shared memory."""
 
     def __init__(
@@ -392,12 +390,8 @@ class Iceoryx2RpcClient:
         self._closing = threading.Event()
 
     @classmethod
-    def connect(cls, endpoint: str, **kwargs: Any) -> Iceoryx2RpcClient:
+    def connect(cls, endpoint: str, **kwargs: Any) -> Self:
         return cls(endpoint, **kwargs)
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
 
     def close(self) -> None:
         self._closing.set()
@@ -410,17 +404,6 @@ class Iceoryx2RpcClient:
         self._closed = True
         if port is not None:
             port.delete()
-
-    def __enter__(self) -> Iceoryx2RpcClient:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self.close()
 
     def _start_call(
         self,
@@ -634,14 +617,7 @@ class Iceoryx2RpcClient:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class _Method:
-    request_type: type[BaseModel]
-    response_type: type[BaseModel]
-    handler: Handler
-
-
-class Iceoryx2RpcServer:
+class Iceoryx2RpcServer(RpcServer):
     """A synchronous typed RPC server using iceoryx2 shared memory."""
 
     def __init__(
@@ -679,21 +655,13 @@ class Iceoryx2RpcServer:
         self.spin_duration = float(spin_duration)
         self._node, self._service, self._port = _open_port(endpoint, server=True)
         self._lock = threading.RLock()
-        self._methods: dict[str, _Method] = {}
+        super().__init__()
         self._stopping = threading.Event()
         self._closed = False
 
     @classmethod
-    def bind(cls, endpoint: str, **kwargs: Any) -> Iceoryx2RpcServer:
+    def bind(cls, endpoint: str, **kwargs: Any) -> Self:
         return cls(endpoint, **kwargs)
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
-
-    @property
-    def methods(self) -> tuple[str, ...]:
-        return tuple(sorted(self._methods))
 
     def close(self) -> None:
         self._stopping.set()
@@ -707,60 +675,10 @@ class Iceoryx2RpcServer:
     def stop(self) -> None:
         self._stopping.set()
 
-    def __enter__(self) -> Iceoryx2RpcServer:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self.close()
-
-    def register(
-        self,
-        name: str,
-        request_type: type[RequestT],
-        response_type: type[ResponseT],
-        handler: Callable[[RequestT, RpcContext], ResponseT],
-    ) -> None:
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("method name must be a non-empty string")
-        if name in self._methods:
-            raise ValueError(f"RPC method {name!r} is already registered")
-        for label, model_type in (
-            ("request_type", request_type),
-            ("response_type", response_type),
-        ):
-            if not isinstance(model_type, type) or not issubclass(model_type, BaseModel):
-                raise TypeError(f"{label} must be a Pydantic model class")
-        if not callable(handler):
-            raise TypeError("handler must be callable")
-        self._methods[name] = _Method(  # type: ignore[arg-type]
-            request_type,
-            response_type,
-            handler,
-        )
-
-    def method(
-        self,
-        name: str,
-        *,
-        request: type[RequestT],
-        response: type[ResponseT],
-    ) -> Callable[
-        [Callable[[RequestT, RpcContext], ResponseT]],
-        Callable[[RequestT, RpcContext], ResponseT],
-    ]:
-        def decorate(
-            handler: Callable[[RequestT, RpcContext], ResponseT],
-        ) -> Callable[[RequestT, RpcContext], ResponseT]:
-            self.register(name, request, response, handler)
-            return handler
-
-        return decorate
-
+    @staticmethod
+    def has_protocol(protocol: Literal["tcp", "ipc"]) -> bool:
+        return protocol == "ipc"
+    
     def _send_empty(self, active: Any, envelope: Envelope) -> None:
         try:
             if active.is_connected:

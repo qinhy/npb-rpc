@@ -5,16 +5,14 @@ from __future__ import annotations
 import math
 import threading
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
-from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, Literal, Self, TypeVar
 from uuid import uuid4
 
 import numpy as np
 from npb import BlobStore, NPBError, decode, encode
 from pydantic import BaseModel, ValidationError
 
+from ._base import RpcClient, RpcServer
 from ._errors import (
     RemoteRpcError,
     RpcAbort,
@@ -35,7 +33,6 @@ from ._protocol import (
 
 RequestT = TypeVar("RequestT", bound=BaseModel)
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
-Handler = Callable[[BaseModel, RpcContext], BaseModel]
 
 
 def _load_zmq():
@@ -68,7 +65,7 @@ def _remaining_poll_ms(deadline_ns: int | None) -> int | None:
     return max(1, math.ceil(remaining_ns / 1_000_000))
 
 
-class ZmqRpcClient:
+class ZmqRpcClient(RpcClient):
     """A thread-safe synchronous unary RPC client.
 
     Calls on one client are serialized because ZeroMQ sockets are not thread-safe.
@@ -115,29 +112,14 @@ class ZmqRpcClient:
         self._closed = False
 
     @classmethod
-    def connect(cls, endpoint: str, **kwargs: Any) -> ZmqRpcClient:
+    def connect(cls, endpoint: str, **kwargs: Any) -> Self:
         return cls(endpoint, **kwargs)
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
 
     def close(self) -> None:
         if self._closed:
             return
         self._socket.close()
         self._closed = True
-
-    def __enter__(self) -> ZmqRpcClient:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self.close()
 
     def call(
         self,
@@ -239,14 +221,7 @@ class ZmqRpcClient:
             raise RpcProtocolError(f"invalid response payload: {exc}") from exc
 
 
-@dataclass(frozen=True, slots=True)
-class _Method:
-    request_type: type[BaseModel]
-    response_type: type[BaseModel]
-    handler: Handler
-
-
-class ZmqRpcServer:
+class ZmqRpcServer(RpcServer):
     """A synchronous unary RPC server using a ZeroMQ ROUTER socket."""
 
     def __init__(
@@ -285,25 +260,17 @@ class ZmqRpcServer:
             self._socket.bind(endpoint)
         else:
             self._socket.connect(endpoint)
-        self._methods: dict[str, _Method] = {}
+        super().__init__()
         self._stopping = threading.Event()
         self._closed = False
 
     @classmethod
-    def bind(cls, endpoint: str, **kwargs: Any) -> ZmqRpcServer:
+    def bind(cls, endpoint: str, **kwargs: Any) -> Self:
         return cls(endpoint, bind=True, **kwargs)
 
     @classmethod
-    def connect(cls, endpoint: str, **kwargs: Any) -> ZmqRpcServer:
+    def connect(cls, endpoint: str, **kwargs: Any) -> Self:
         return cls(endpoint, bind=False, **kwargs)
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
-
-    @property
-    def methods(self) -> tuple[str, ...]:
-        return tuple(sorted(self._methods))
 
     def close(self) -> None:
         if self._closed:
@@ -316,62 +283,9 @@ class ZmqRpcServer:
         """Ask serve_forever() to return after its current handler finishes."""
         self._stopping.set()
 
-    def __enter__(self) -> ZmqRpcServer:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self.close()
-
-    def register(
-        self,
-        name: str,
-        request_type: type[RequestT],
-        response_type: type[ResponseT],
-        handler: Callable[[RequestT, RpcContext], ResponseT],
-    ) -> None:
-        """Register a typed unary method."""
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("method name must be a non-empty string")
-        if name in self._methods:
-            raise ValueError(f"RPC method {name!r} is already registered")
-        for label, model_type in (
-            ("request_type", request_type),
-            ("response_type", response_type),
-        ):
-            if not isinstance(model_type, type) or not issubclass(model_type, BaseModel):
-                raise TypeError(f"{label} must be a Pydantic model class")
-        if not callable(handler):
-            raise TypeError("handler must be callable")
-        self._methods[name] = _Method(  # type: ignore[arg-type]
-            request_type,
-            response_type,
-            handler,
-        )
-
-    def method(
-        self,
-        name: str,
-        *,
-        request: type[RequestT],
-        response: type[ResponseT],
-    ) -> Callable[
-        [Callable[[RequestT, RpcContext], ResponseT]],
-        Callable[[RequestT, RpcContext], ResponseT],
-    ]:
-        """Decorator form of register()."""
-
-        def decorate(
-            handler: Callable[[RequestT, RpcContext], ResponseT],
-        ) -> Callable[[RequestT, RpcContext], ResponseT]:
-            self.register(name, request, response, handler)
-            return handler
-
-        return decorate
+    @staticmethod
+    def has_protocol(protocol: Literal["tcp", "ipc"]) -> bool:
+        return _load_zmq().has(protocol)
 
     def _send(
         self,
