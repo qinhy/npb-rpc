@@ -204,7 +204,7 @@ if __name__ == "__main__":
     for i in range(10):
         cap = api.capture_dual(meta={
             "gnss": {
-                "the_data": "xxxxxxxxx",
+                "fix": "xxxxxxxxx",
             },
             "arm": {
                 "run_id": "UUIDXXXX",
