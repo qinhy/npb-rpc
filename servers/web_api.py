@@ -54,8 +54,9 @@ class Client:
         return self._call("POST", "/job/wait",json=json)
     
     def wait_jobs(self,jobs:list):
-        if len(jobs)==0:return
+        if len(jobs)==0:return "ok"
         for job in jobs:api.job_wait_event(job["done_event"])
+        return "ok"
     
     def open_dual_rgb(self,json={
             "rgb_size": [3872,3008],
@@ -64,7 +65,8 @@ class Client:
             "max_exposure_us": 16667,
             "timeout_s": 20
         }):
-        return self._call("POST", "/open_dual_rgb", json=json)
+        self._call("POST", "/open_dual_rgb", json=json)
+        return "ok"
 
     def open_hand(self,json={
             "rgb_size": [3872,3008],
@@ -73,10 +75,12 @@ class Client:
             "max_exposure_us": 16667,
             "timeout_s": 20
         }):
-        return self._call("POST", "/open_hand", json=json)
+        self._call("POST", "/open_hand", json=json)
+        return "ok"
 
     def close_cams(self):
-        return self._call("GET", "/close_cams")
+        self._call("GET", "/close_cams")
+        return "ok"
 
     def capture_dual(self, meta=None):
         return self._call("POST", "/capture_dual_rgb", json={"meta": meta or {}})
@@ -167,39 +171,129 @@ def current_jst_string() -> str:
   
 
 if __name__ == "__main__":
-    class_name,confidence="person",0.01
+    from pprint import pformat
+    def section(title: str) -> None:
+        print(f"\n{'=' * 12} {title} {'=' * 12}")
+    def show(name: str, result) -> None:
+        if isinstance(result, (dict, list, tuple)):
+            print(f"[{name}]")
+            print(pformat(result, width=100, sort_dicts=False))
+        else:
+            print(f"[{name}] {result}")
+
+    class_name, confidence = "person", 0.01
     api = Client(url="http://127.0.0.1:8000")
-    print("init:",api.refresh(),
-                api.yolo_set_model({"model_name":"yolo11l-seg.pt"}),
-                api.pcd_set_backend({"backend":"sgbm","max_depth_m":2.0}))
-    
-    print("close:", api.close_cams())
-    print("dual:", api.open_dual_rgb())
+    section("INITIALIZE")
+    show("refresh",    api.refresh())
+    show("yolo model", api.yolo_set_model({
+        "model_name": "yolo11l-seg.pt",
+        "confidence":0.25,
+    }))
+    show("pcd backend",api.pcd_set_backend({
+        "backend": "sgbm",
+        "max_depth_m": 2.0,
+    }))
+
+    section("DUAL CAMERA")
+    show("close cams", api.close_cams())
+    show("open dual",  api.open_dual_rgb())
 
     start = current_jst_string()
     yolo_jobs = []
+
     for i in range(10):
         cap = api.capture_dual(meta={
-                        "gnss":{"the_data":"xxxxxxxxx"},
-                        "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
+            "gnss": {
+                "the_data": "xxxxxxxxx",
+            },
+            "arm": {
+                "run_id": "UUIDXXXX",
+                "data": {
+                    "pose": "xxxxxxxxx",
+                },
+            },
+        })
+
         yolo_jobs += cap["yolo_jobs"]
-        print("dual:", cap)
+
+        print(
+            f"[capture {i + 1:02d}/10] "
+            f"db={cap.get('db_name')} "
+            f"id={cap.get('_id')} "
+            f"yolo_jobs={len(cap.get('yolo_jobs', []))}"
+        )
+
     end = current_jst_string()
 
-    print("close:", api.close_cams())
-    print("hand:", api.open_hand())    
-    print(f"wait yolos:", api.wait_jobs(yolo_jobs))
+    section("HAND CAMERA")
+    show("close cams", api.close_cams())
+    show("open hand", api.open_hand())
 
-    print(f"search {cap['db_name']} {start}->{end}",
-                db_find_gnss_by_yolo(api,cap["db_name"],start,end,class_name,confidence))
+    section("YOLO dual jobs")
+    show("wait jobs", api.wait_jobs(yolo_jobs))
+    section("SEARCH DUAL")
 
+    print(
+        f"db    : {cap['db_name']}\n"
+        f"range : {start} -> {end}\n"
+        f"class : {class_name}\n"
+        f"conf  : {confidence}"
+    )
+
+    result = db_find_gnss_by_yolo(
+        api,
+        cap["db_name"],
+        start,
+        end,
+        class_name,
+        confidence,
+    )
+    show("result", result)
+
+    section("HAND CAMERA")
     cap = api.capture_hand(meta={
-                    "gnss":{"the_data":"xxxxxxxxx"},
-                    "arm":{"run_id":"UUIDXXXX","data":{"pose":"xxxxxxxxx"}}})
-    print("hand:", cap)
-    print(f"search {cap['db_name']} {cap['_id']}",
-            db_find_pcds_by_yolo(api,cap["db_name"],cap["_id"],class_name,confidence))
+        "gnss": {
+            "the_data": "xxxxxxxxx",
+        },
+        "arm": {
+            "run_id": "UUIDXXXX",
+            "data": {
+                "pose": "xxxxxxxxx",
+            },
+        },
+    })
+    show("capture hand", cap)
+
+    section("SEARCH HAND")
+    print(
+        f"db    : {cap['db_name']}\n"
+        f"id    : {cap['_id']}\n"
+        f"class : {class_name}\n"
+        f"conf  : {confidence}"
+    )
+
+    result = db_find_pcds_by_yolo(
+        api,
+        cap["db_name"],
+        cap["_id"],
+        class_name,
+        confidence,
+    )
+    show("result", result)
+
+    section("ADD ARM DATA")
+    show(
+        "add arm",
+        api.db_add_arm(
+            cap["db_name"],
+            cap["_id"],
+            run_id="UUIDYYYY",
+            data={
+                "ops": "xxxxxxxxx",
+            },
+        ),
+    )
     
-    api.db_add_arm(cap["db_name"], cap["_id"], run_id="UUIDYYYY",data={"ops":"xxxxxxxxx"})
-    print("close:", api.close_cams())
+    section("CLOSE")
+    show("close cams", api.close_cams())
 

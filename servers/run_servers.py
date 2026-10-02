@@ -18,7 +18,7 @@ class Service:
 # elif sys.platform.startswith("linux"):
 #     python = ("python3")
 
-backend="zmq"   # [--backend {nng,zmq,iceoryx2}]
+backend="nng"   # [--backend {nng,zmq,iceoryx2}]
 transport="ipc" # [--transport {tcp,ipc}]
 SERVICES = [
     Service(

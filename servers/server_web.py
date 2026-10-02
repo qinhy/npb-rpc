@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 from typing import Any, Dict, List, Literal
@@ -418,6 +419,43 @@ app.add_api_route("/controllers/yolo/set_model", # Configure YOLO model |
 app.add_api_route("/controllers/pcd/set_backend", # Select SGBM/DNN PCD backend |
     pcd_set_config,methods=["POST"],tags=["release"],)
 
+
+def warmup(env: dict[str, str]) -> None:
+    """Prime library caches before launching servers; CUDA contexts remain per-process."""
+    print("[WARMUP] Loading heavy libraries...", flush=True)
+    # Use the servers' environment and release GPU allocations when this child exits.
+    code = """
+import importlib
+import time
+
+for name in ("numpy", "cv2", "torch", "torchvision", "cupy", "ultralytics", "depthai"):
+    started = time.monotonic()
+    try:
+        module = importlib.import_module(name)
+        if name == "torch":
+            device = "cuda" if module.cuda.is_available() else "cpu"
+            x = module.ones((64, 64), device=device)
+            result = x @ x
+            if device == "cuda":
+                module.cuda.synchronize()
+            del x, result
+        elif name == "cupy":
+            x = module.ones((64, 64), dtype=module.float32)
+            result = x @ x
+            module.cuda.get_current_stream().synchronize()
+            del x, result
+        print(f"[WARMUP] {name}: {time.monotonic() - started:.2f}s", flush=True)
+    except Exception as exc:
+        print(f"[WARMUP] {name}: skipped ({exc})", flush=True)
+"""
+    try:
+        subprocess.run(["uv", "run", "python", "-c", code], env=env, check=True, timeout=180)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[WARMUP] Continuing without completed warmup: {exc}", flush=True)
+
 if __name__ == "__main__":
+    env = os.environ.copy()
+    env["LOG_REDIS_URL"] = "redis://127.0.0.1:6379/0"
+    warmup(env)
     refresh_routes()
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -665,7 +665,7 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
     if save_full_cloud:
         filename = f"full.pcd"
         save_pcd(output_dir / filename, points_left, colors_rgb, binary=binary_pcd)
-        LOG.info(f"saved {filename} ({len(points_left)} points)")
+        # LOG.info(f"saved {filename} ({len(points_left)} points)")
         filenames.append(filename)
 
     LOG.info(f"saved {filenames}")
