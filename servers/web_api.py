@@ -242,7 +242,7 @@ if __name__ == "__main__":
             print(f"[{name}] {result}")
 
     class_name, confidence = "person", 0.01
-    api = Client(url="http://127.0.0.1:8000")
+    api = Client(url="http://127.0.0.1:8000",timeout=60)
 
     section("DUAL CAMERA")
     show("close cams", api.close_cams())
