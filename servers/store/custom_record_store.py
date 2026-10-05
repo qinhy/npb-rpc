@@ -1148,14 +1148,18 @@ class ArmRecord(RecordModel):
         return path
 
     def add_result(self, run_id: str, data: Dict):
-        run_dir = self.expected_root_path()
+        run_dir = (
+            self.expected_root_path()
+            / run_id # legacy
+        )
         run_dir.mkdir(parents=True, exist_ok=True)
         path = run_dir / f"{run_id}_{self.kind}{self.suffix}"
         _write_json(path, data)
 
     def get_result(self, run_id: str) -> Dict:
         path = (
-            self.expected_root_path()           
+            self.expected_root_path()
+            / run_id # legacy
             / f"{run_id}_{self.kind}{self.suffix}"
         )
         return _read_json(path)

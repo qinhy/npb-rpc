@@ -361,7 +361,9 @@ def db_add_arm(db_name: DBName, doc_id: str, run_id:str, data:dict, kind:str="ar
     db = get_db(db_name)
     doc = db.get(doc_id)
     if doc is None:return not_found()    
-    path = Path(db.root)/Path(doc_id.replace(":","/"))/"arm"/f"{run_id}_{kind}.json"
+    path = (Path(db.root)/Path(doc_id.replace(":","/"))/"arm"
+            / run_id # legacy
+            /f"{run_id}_{kind}.json")
     path.parent.mkdir(parents=True,exist_ok=True)
     path.write_text(json.dumps(data))
     return path
