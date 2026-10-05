@@ -479,5 +479,13 @@ if __name__ == "__main__":
     env = os.environ.copy()
     env["LOG_REDIS_URL"] = "redis://127.0.0.1:6379/0"
     warmup(env)
-    refresh_routes()
+    
+    refresh_ok = False
+    while not refresh_ok:
+        try:
+            refresh_routes()
+            refresh_ok = True
+        except Exception as e:
+            refresh_ok = False
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
