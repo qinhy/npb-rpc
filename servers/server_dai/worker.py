@@ -291,6 +291,10 @@ class DepthAISessionHandler:
                 **raw_cal,
             )
 
+            calibration.rgb_resolution = self.config.rgb_size
+            calibration.left_resolution = self.config.stereo_size
+            calibration.right_resolution = self.config.stereo_size
+            
             LOG.info(calibration)
             if not control.emit(("calibration", calibration)):
                 return
