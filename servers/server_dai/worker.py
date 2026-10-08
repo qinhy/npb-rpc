@@ -233,14 +233,63 @@ class DepthAISessionHandler:
                 return
 
             streams:dict[str, CameraStream] = self.config.build(pipeline)
+            raw_cal = next(iter(streams.values())).read_calibration_dict()
+
+            # Factory RGB calibration is referenced to 3840x2160.
+            # Supported RGB outputs are assumed to be centered 1:1 sensor crops.
+            # No scaling is applied to focal lengths.
+            default_rgb_wh = tuple(raw_cal["rgb_resolution"])
+            output_rgb_wh = tuple(self.config.rgb_size)
+
+            SUPPORTED_RGB_OUTPUTS = {
+                (3840, 2160),  # Factory calibration resolution
+                (3872, 3008),  # Cropped full-resolution output
+                (4056, 3040),  # Full sensor resolution
+            }
+
+            if default_rgb_wh != output_rgb_wh:
+                if not (
+                    self.config.resize_mode == "CROP"
+                    and default_rgb_wh == (3840, 2160)
+                    and output_rgb_wh in SUPPORTED_RGB_OUTPUTS
+                ):
+                    raise RuntimeError(
+                        f"Uncalibrated RGB output geometry: "
+                        f"factory {default_rgb_wh}, "
+                        f"requested {output_rgb_wh}, "
+                        f"resize mode {self.config.resize_mode}. "
+                        "Compute actual crop/resize intrinsics before publishing."
+                    )
+
+                K_rgb = [list(row) for row in raw_cal["rgb_intrinsics"]]
+
+                # Correct principal point for centered 1:1 crop.
+                dx = (output_rgb_wh[0] - default_rgb_wh[0]) / 2.0
+                dy = (output_rgb_wh[1] - default_rgb_wh[1]) / 2.0
+
+                K_rgb[0][2] += dx
+                K_rgb[1][2] += dy
+
+                raw_cal["rgb_intrinsics"] = K_rgb
+                raw_cal["rgb_resolution"] = output_rgb_wh
+
+            # Validate stereo calibration.
+            for name in ("left", "right"):
+                actual_wh = tuple(raw_cal[f"{name}_resolution"])
+                requested_wh = tuple(self.config.stereo_size)
+
+                if actual_wh != requested_wh:
+                    raise RuntimeError(
+                        f"{name} calibration is for {actual_wh}, "
+                        f"but requested {requested_wh}; "
+                        "must also adapt its intrinsics."
+                    )
+
             calibration = CameraCalibrationResponse(
                 ok=True,
                 camera_online=True,
-                **next(iter(streams.values())).read_calibration_dict(),
+                **raw_cal,
             )
-            calibration.rgb_resolution = self.config.rgb_size
-            calibration.left_resolution = self.config.stereo_size
-            calibration.right_resolution = self.config.stereo_size
 
             LOG.info(calibration)
             if not control.emit(("calibration", calibration)):

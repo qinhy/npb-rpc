@@ -31,6 +31,7 @@ def get_db_root():
         return Path("./recordings/").absolute()
     elif sys.platform.startswith("linux"):
         return Path("./recordings/").absolute()
+    return Path("./recordings/").absolute()
 
 STORE = CustomStore(root_path=get_db_root())
 console = Console()

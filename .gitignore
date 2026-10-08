@@ -16,3 +16,6 @@ run_all.bat
 run_rgbd_hand.bat
 run_rgbd_left.bat
 run_rgbd_right.bat
+/rgbd_hand_pcd_debug
+/.vscode
+*.pcd

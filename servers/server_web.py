@@ -470,7 +470,10 @@ if __name__ == "__main__":
     all_pt = set([f.name for f in list(Path("./").rglob("*.pt"))])
     official_pt = set([pt for pt in all_pt if is_official_model_name(pt)])
     unofficial_pt = all_pt-official_pt
-    GLOBAL_yolo_config.model_name = list(official_pt)[0]
+    try:
+        GLOBAL_yolo_config.model_name = list(official_pt)[0]
+    except Exception as e:
+        GLOBAL_yolo_config.model_name = "yolo26n.pt"
     GLOBAL_yolo_config.confidence = 0.25
     if len(unofficial_pt)>0:
         GLOBAL_yolo_config.model_name = list(unofficial_pt)[0]
