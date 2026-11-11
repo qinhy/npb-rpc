@@ -10,6 +10,7 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torchvision.io import ImageReadMode, decode_jpeg, read_file
 from ultralytics.utils.downloads import (
     GITHUB_ASSETS_NAMES,
@@ -267,6 +268,73 @@ def crop_mask(mask: np.ndarray, left: int, top: int) -> MaskPatch | None:
     return MaskPatch(cropped, left + x1, top + y1)
 
 
+def extract_mask_patches(
+    mask_data: torch.Tensor,
+    *,
+    threshold: float,
+    source_shape: tuple[int, int],
+    origin_x: int,
+    origin_y: int,
+) -> list[MaskPatch | None]:
+    """Threshold and tightly crop [N, H, W] masks on their own device.
+
+    Only the cropped boolean patches cross to the CPU, in a single transfer,
+    instead of N full-resolution float masks. Returns one entry per mask;
+    an empty mask yields None, matching crop_mask().
+    """
+    count = int(mask_data.shape[0])
+    if count == 0:
+        return []
+
+    source_h, source_w = source_shape
+    if tuple(mask_data.shape[-2:]) != (source_h, source_w):
+        mask_data = F.interpolate(
+            mask_data[None].float(),
+            size=(source_h, source_w),
+            mode="bilinear",
+            align_corners=False,
+        )[0]
+
+    binary = mask_data if mask_data.dtype == torch.bool else mask_data >= threshold
+
+    rows = binary.any(dim=2)  # [N, H]
+    cols = binary.any(dim=1)  # [N, W]
+    rows_i, cols_i = rows.int(), cols.int()
+
+    # argmax returns the first maximum, so this is the first/last set row and column.
+    bounds = torch.stack(
+        [
+            rows_i.argmax(dim=1),
+            source_h - rows_i.flip(1).argmax(dim=1),
+            cols_i.argmax(dim=1),
+            source_w - cols_i.flip(1).argmax(dim=1),
+            rows.any(dim=1).long(),
+        ],
+        dim=1,
+    ).tolist()
+
+    kept = [index for index in range(count) if bounds[index][4]]
+    if not kept:
+        return [None] * count
+
+    flat = torch.cat(
+        [
+            binary[index, bounds[index][0]:bounds[index][1], bounds[index][2]:bounds[index][3]].reshape(-1)
+            for index in kept
+        ]
+    ).cpu().numpy()
+
+    patches: list[MaskPatch | None] = [None] * count
+    offset = 0
+    for index in kept:
+        y1, y2, x1, x2, _ = bounds[index]
+        height, width = y2 - y1, x2 - x1
+        data = flat[offset:offset + height * width].reshape(height, width)
+        offset += height * width
+        patches[index] = MaskPatch(data, origin_x + x1, origin_y + y1)
+    return patches
+
+
 def union_mask_patches(patches: list[MaskPatch]) -> MaskPatch:
     left = min(patch.left for patch in patches)
     top = min(patch.top for patch in patches)
@@ -331,10 +399,9 @@ def mask_to_polygon(
             parent = int(hierarchy[contour_index][3])
             polygons.append(
                 YoloPolygon(
-                    points_xy=[
-                        [float(x + patch.left), float(y + patch.top)]
-                        for x, y in points
-                    ],
+                    points_xy=(
+                        points.astype(np.float64) + (patch.left, patch.top)
+                    ).tolist(),
                     is_hole=parent >= 0,
                     parent_index=output_index.get(parent) if parent >= 0 else None,
                 )
@@ -370,12 +437,20 @@ def box_iou_iom(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
     return iou, iom
 
 
+_CLUSTER_CHUNK_ROWS = 512
+
+
 def cluster_tiled_candidates(
     candidates: list[Candidate],
     *,
     iou_threshold: float,
     iom_threshold: float,
 ) -> list[list[Candidate]]:
+    """Group duplicates of one object seen in different tiles.
+
+    Pairwise IoU/IoM is computed with NumPy per class, in row chunks to bound
+    memory; only the matching pairs reach the Python union-find.
+    """
     count = len(candidates)
     if count <= 1:
         return [[item] for item in candidates]
@@ -393,19 +468,57 @@ def cluster_tiled_candidates(
         if ra != rb:
             parent[rb] = ra
 
-    for i in range(count):
-        a = candidates[i]
-        for j in range(i + 1, count):
-            b = candidates[j]
-            if a.class_id != b.class_id:
-                continue
+    boxes32 = np.stack([item.bbox_xyxy for item in candidates], axis=0).astype(np.float32, copy=False)
+    boxes = boxes32.astype(np.float64)
+    # Sides are subtracted in float32 like box_iou_iom(), so thresholds decide identically.
+    areas = (
+        np.maximum(0.0, (boxes32[:, 2] - boxes32[:, 0]).astype(np.float64))
+        * np.maximum(0.0, (boxes32[:, 3] - boxes32[:, 1]).astype(np.float64))
+    )
+    class_ids = np.fromiter((item.class_id for item in candidates), dtype=np.int64, count=count)
 
-            # Ultralytics already suppresses duplicates inside one tile.
-            if a.tile is not None and b.tile is not None and a.tile == b.tile:
-                continue
+    # Ultralytics already suppresses duplicates inside one tile, so same-tile pairs
+    # never merge. Candidates without a tile get unique ids and can always merge.
+    tile_keys: dict[tuple[int, int, int, int], int] = {}
+    tile_ids = np.empty(count, dtype=np.int64)
+    for index, item in enumerate(candidates):
+        tile = item.tile
+        if tile is None:
+            tile_ids[index] = -1 - index
+        else:
+            key = (tile.left, tile.top, tile.right, tile.bottom)
+            tile_ids[index] = tile_keys.setdefault(key, len(tile_keys))
 
-            iou, iom = box_iou_iom(a.bbox_xyxy, b.bbox_xyxy)
-            if iou >= iou_threshold or iom >= iom_threshold:
+    for class_id in np.unique(class_ids):
+        members = np.flatnonzero(class_ids == class_id)
+        size = int(members.size)
+        if size < 2:
+            continue
+
+        b = boxes[members]
+        area = areas[members]
+        tiles = tile_ids[members]
+        columns = np.arange(size)
+
+        for start in range(0, size, _CLUSTER_CHUNK_ROWS):
+            stop = min(start + _CLUSTER_CHUNK_ROWS, size)
+            rb = b[start:stop, None, :]
+
+            width = np.minimum(rb[..., 2], b[None, :, 2]) - np.maximum(rb[..., 0], b[None, :, 0])
+            height = np.minimum(rb[..., 3], b[None, :, 3]) - np.maximum(rb[..., 1], b[None, :, 1])
+            inter = np.maximum(0.0, width) * np.maximum(0.0, height)
+
+            union_area = area[start:stop, None] + area[None, :] - inter
+            smaller = np.minimum(area[start:stop, None], area[None, :])
+            iou = np.divide(inter, union_area, out=np.zeros_like(inter), where=union_area > 0.0)
+            iom = np.divide(inter, smaller, out=np.zeros_like(inter), where=smaller > 0.0)
+
+            match = (iou >= iou_threshold) | (iom >= iom_threshold)
+            match &= tiles[start:stop, None] != tiles[None, :]
+            match &= columns[None, :] > columns[start:stop, None]
+
+            local_i, local_j = np.nonzero(match)
+            for i, j in zip(members[local_i + start].tolist(), members[local_j].tolist()):
                 union(i, j)
 
     grouped: dict[int, list[Candidate]] = {}
@@ -506,7 +619,8 @@ def resolve_path(value: str, root: Path | None) -> Path:
 def write_json_atomic(output_path: Path, result: Any, job_id: str) -> None:
     temporary = output_path.with_name(f".{output_path.name}.{job_id}.tmp")
     try:
-        temporary.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        # Compact output: indent=2 put every polygon coordinate on its own line.
+        temporary.write_bytes(result.model_dump_json().encode("utf-8"))
         os.replace(temporary, output_path)
     finally:
         with suppress(FileNotFoundError):

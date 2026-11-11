@@ -59,7 +59,12 @@ class YoloService(YoloInterface):
             snapshot = self.worker.job_status(request.job_id)
             if snapshot is None:
                 return YoloJobStatusResponse(job_id=request.job_id, error="job not found or expired")
-            return YoloJobStatusResponse(**snapshot.model_dump())
+            # Status stays lightweight: keep the result summary (counts, timing)
+            # but not the detections/polygons. Use job_result for those.
+            data = snapshot.model_dump(exclude={"result": {"detections"}})
+            if data.get("result") is not None:
+                data["result"]["detections"] = []
+            return YoloJobStatusResponse(**data)
         except Exception as exc:
             self.log.exception("yolo.job_status failed")
             return YoloJobStatusResponse(

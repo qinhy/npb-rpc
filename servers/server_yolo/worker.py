@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from servers.logger import logging
 from pathlib import Path
 import threading
 import time
 from typing import Any, Iterator
 
-import cv2
 import numpy as np
 import torch
 from ultralytics import YOLO
@@ -22,8 +21,8 @@ from servers.server_yolo.yolo_utils import (
     Candidate,
     cluster_tiled_candidates,
     class_name,
-    crop_mask,
     effective_roi,
+    extract_mask_patches,
     group_to_detection,
     make_divisible,
     make_tiles,
@@ -125,8 +124,31 @@ class YoloModelCache:
 # ============================================================
 
 
+@dataclass
+class _InferenceOutput:
+    """Everything detect needs after the GPU work; holds no device tensors."""
+
+    image_width: int
+    image_height: int
+    effective_roi_box: list[int] | None
+    tile_size: int | None
+    tile_count: int | None
+    effective_tile_overlap: int | None
+    started: float
+    preprocess_ms: float = 0.0
+    inference_ms: float = 0.0
+    extract_ms: float = 0.0
+    candidates: list[Candidate] = field(default_factory=list)
+
+
 class UltralyticsYoloDetector:
-    """Ultralytics orchestration; reusable algorithms live in yolo_utils.py."""
+    """Ultralytics orchestration; reusable algorithms live in yolo_utils.py.
+
+    Work is split in two so the caller can hold the device lock only for the
+    first half:
+      infer()        -- decode, tile, predict, pull candidates off the device
+      build_result() -- CPU-only merging, polygons, result model
+    """
 
     def detect(
         self,
@@ -135,6 +157,14 @@ class UltralyticsYoloDetector:
         request: YoloInferenceRequest,
         input_path: Path,
     ) -> YoloDetectResult:
+        return self.build_result(self.infer(model, request, input_path), model_task, request)
+
+    def infer(
+        self,
+        model: YOLO,
+        request: YoloInferenceRequest,
+        input_path: Path,
+    ) -> _InferenceOutput:
         t_total = time.perf_counter()
 
         # Preprocess
@@ -176,22 +206,32 @@ class UltralyticsYoloDetector:
             )
             tile_count = len(tiles)
 
-        preprocess_ms = (time.perf_counter() - t0) * 1000.0
+        output = _InferenceOutput(
+            image_width=image_w,
+            image_height=image_h,
+            effective_roi_box=effective_roi_box,
+            tile_size=tile_size,
+            tile_count=tile_count,
+            effective_tile_overlap=effective_tile_overlap,
+            started=t_total,
+            preprocess_ms=(time.perf_counter() - t0) * 1000.0,
+        )
 
-        # Inference
-        inference_ms = 0.0
-        candidates: list[Candidate] = []
-
+        # Inference. Every phase is timed: batch prep counts as preprocess,
+        # model.predict as inference, candidate extraction as extract.
         if request.size_mode == "resize":
             t0 = time.perf_counter()
             source = prepare_yolo_batch([roi], imgsz=request.imgsz, half=request.half)
+            t1 = time.perf_counter()
             results = self._predict(model, source, request, request.imgsz)
-            inference_ms += (time.perf_counter() - t0) * 1000.0
+            t2 = time.perf_counter()
+            output.preprocess_ms += (t1 - t0) * 1000.0
+            output.inference_ms += (t2 - t1) * 1000.0
 
             if len(results) != 1:
                 raise RuntimeError(f"expected one YOLO result, got {len(results)}")
 
-            candidates.extend(
+            output.candidates.extend(
                 self._extract_candidates(
                     results[0],
                     request=request,
@@ -201,24 +241,28 @@ class UltralyticsYoloDetector:
                     tile=None,
                 )
             )
+            output.extract_ms += (time.perf_counter() - t2) * 1000.0
         else:
             for start in range(0, len(tiles), request.tile_batch_size):
                 batch = tiles[start:start + request.tile_batch_size]
+
+                t0 = time.perf_counter()
                 source = prepare_yolo_batch(
                     [item.image for item in batch],
                     imgsz=tile_size or request.imgsz,
                     half=request.half,
                 )
-
-                t0 = time.perf_counter()
+                t1 = time.perf_counter()
                 results = self._predict(model, source, request, tile_size or request.imgsz)
-                inference_ms += (time.perf_counter() - t0) * 1000.0
+                t2 = time.perf_counter()
+                output.preprocess_ms += (t1 - t0) * 1000.0
+                output.inference_ms += (t2 - t1) * 1000.0
 
                 if len(results) != len(batch):
                     raise RuntimeError(f"expected {len(batch)} YOLO results, got {len(results)}")
 
                 for result, item in zip(results, batch):
-                    candidates.extend(
+                    output.candidates.extend(
                         self._extract_candidates(
                             result,
                             request=request,
@@ -228,17 +272,28 @@ class UltralyticsYoloDetector:
                             tile=item.tile,
                         )
                     )
+                output.extract_ms += (time.perf_counter() - t2) * 1000.0
 
-        # Postprocess
+        return output
+
+    def build_result(
+        self,
+        output: _InferenceOutput,
+        model_task: str,
+        request: YoloInferenceRequest,
+    ) -> YoloDetectResult:
+        """CPU-only postprocess; safe to run without the device lock."""
+        image_w, image_h = output.image_width, output.image_height
+
         t0 = time.perf_counter()
         groups = (
             cluster_tiled_candidates(
-                candidates,
+                output.candidates,
                 iou_threshold=request.iou,
                 iom_threshold=request.tile_merge_iom,
             )
             if request.size_mode == "tiling"
-            else [[candidate] for candidate in candidates]
+            else [[candidate] for candidate in output.candidates]
         )
 
         detections = [
@@ -256,13 +311,17 @@ class UltralyticsYoloDetector:
 
         has_masks = any(item.mask is not None for item in detections)
         task = "segment" if request.include_masks and model_task == "segment" else "detect"
-        postprocess_ms = (time.perf_counter() - t0) * 1000.0
+        merge_ms = (time.perf_counter() - t0) * 1000.0
+
+        # YoloTiming has no extract field, so extraction is reported as postprocess.
+        postprocess_ms = output.extract_ms + merge_ms
+        total_ms = (time.perf_counter() - output.started) * 1000.0
 
         timing = YoloTiming(
-            preprocess_ms=preprocess_ms,
-            inference_ms=inference_ms,
+            preprocess_ms=output.preprocess_ms,
+            inference_ms=output.inference_ms,
             postprocess_ms=postprocess_ms,
-            total_ms=(time.perf_counter() - t_total) * 1000.0,
+            total_ms=total_ms,
         )
         
         res = YoloDetectResult(
@@ -273,20 +332,22 @@ class UltralyticsYoloDetector:
             detections=detections,
             has_masks=has_masks,
             num_detections=len(detections),
-            tile_size=tile_size,
-            effective_tile_overlap=effective_tile_overlap,
-            tile_count=tile_count,
-            effective_detection_bbox_xyxy=effective_roi_box,
+            tile_size=output.tile_size,
+            effective_tile_overlap=output.effective_tile_overlap,
+            tile_count=output.tile_count,
+            effective_detection_bbox_xyxy=output.effective_roi_box,
             timing=timing,
         )
         LOG.info(f"{dict(
             img_size=(image_w,image_h),
-            crop=effective_roi_box,
-            tile=f"{tile_size}x{tile_count}p",
-            pre_ms=int(preprocess_ms),
-            infer_ms=int(inference_ms),
-            post_ms=int(postprocess_ms),
-            total_ms=int((time.perf_counter() - t_total) * 1000.0),
+            crop=output.effective_roi_box,
+            tile=f"{output.tile_size}x{output.tile_count}p",
+            candidates=len(output.candidates),
+            pre_ms=int(output.preprocess_ms),
+            infer_ms=int(output.inference_ms),
+            extract_ms=int(output.extract_ms),
+            merge_ms=int(merge_ms),
+            total_ms=int(total_ms),
         )}")
         return res
 
@@ -357,45 +418,35 @@ class UltralyticsYoloDetector:
         if boxes is None or len(boxes) == 0:
             return []
 
-        xyxy = boxes.xyxy.detach().cpu().numpy()
-        confidences = boxes.conf.detach().cpu().numpy()
-        class_ids = boxes.cls.detach().cpu().numpy().astype(np.int32, copy=False)
+        offset = np.array([origin_x, origin_y, origin_x, origin_y], dtype=np.float32)
+        xyxy = boxes.xyxy.detach().cpu().numpy().astype(np.float32, copy=False) + offset
+        confidences = boxes.conf.detach().cpu().numpy().tolist()
+        class_ids = boxes.cls.detach().cpu().numpy().astype(np.int32, copy=False).tolist()
 
-        mask_data: np.ndarray | None = None
+        # Masks are thresholded and cropped on the device; only tight boolean
+        # patches are copied to the CPU (see extract_mask_patches).
+        patches: list[Any] = []
         if request.include_masks and result.masks is not None:
-            mask_data = result.masks.data.detach().cpu().numpy()
-
-        source_h, source_w = source_shape
-        candidates: list[Candidate] = []
-
-        for index in range(len(xyxy)):
-            box = xyxy[index].astype(np.float32, copy=True)
-            box[[0, 2]] += origin_x
-            box[[1, 3]] += origin_y
-
-            class_id = int(class_ids[index])
-            mask = None
-            if mask_data is not None and index < len(mask_data):
-                raw_mask = mask_data[index]
-                if raw_mask.shape != (source_h, source_w):
-                    raw_mask = cv2.resize(
-                        raw_mask,
-                        (source_w, source_h),
-                        interpolation=cv2.INTER_LINEAR,
-                    )
-                mask = crop_mask(raw_mask >= request.mask_threshold, origin_x, origin_y)
-
-            candidates.append(
-                Candidate(
-                    class_id=class_id,
-                    class_name=class_name(result.names, class_id),
-                    confidence=float(confidences[index]),
-                    bbox_xyxy=box,
-                    tile=tile,
-                    mask=mask,
-                )
+            patches = extract_mask_patches(
+                result.masks.data.detach(),
+                threshold=request.mask_threshold,
+                source_shape=source_shape,
+                origin_x=origin_x,
+                origin_y=origin_y,
             )
-        return candidates
+
+        names = result.names
+        return [
+            Candidate(
+                class_id=class_ids[index],
+                class_name=class_name(names, class_ids[index]),
+                confidence=confidences[index],
+                bbox_xyxy=xyxy[index],
+                tile=tile,
+                mask=patches[index] if index < len(patches) else None,
+            )
+            for index in range(len(xyxy))
+        ]
 
 
 # ============================================================
@@ -456,17 +507,32 @@ class YoloWorker(
                 cache_hit,
             )
 
-            result = self.detector.detect(
+            # Only the GPU half runs under the device lock.
+            output = self.detector.infer(
                 entry.model,
-                entry.task,
                 request,
                 input_path,
             )
 
+        # CPU-only merging/polygons run unlocked, so with worker_count > 1 the
+        # next job can start inference on this device meanwhile.
+        result = self.detector.build_result(
+            output,
+            entry.task,
+            request,
+        )
+
+        t0 = time.perf_counter()
         write_json_atomic(
             output_path,
             result,
             job_id,
+        )
+        LOG.info(
+            "job %s wrote %s in %d ms",
+            job_id,
+            output_path,
+            int((time.perf_counter() - t0) * 1000.0),
         )
 
         return result
