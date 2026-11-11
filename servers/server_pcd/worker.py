@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import OrderedDict
 from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass
 import json
@@ -141,6 +142,55 @@ class PcdCalibrationCache:
                 return existing
             self._items[key] = calibration
         return calibration
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+
+# --- Rectifier cache ---
+
+class PcdRectifierCache:
+    """
+    Cache ready-to-use stereo rectifiers.
+
+    Building a rectifier runs cv2.stereoRectify, two initUndistortRectifyMap
+    calls, uploads the maps to the compute device and precomputes the
+    bilinear-remap weights. None of that depends on the job, only on the
+    calibration object (which is already per file version and per device),
+    alpha and the stereo image size, so it is done once and reused.
+    """
+
+    def __init__(self, *, max_entries: int = 8) -> None:
+        self._max_entries = max(1, int(max_entries))
+        self._lock = threading.RLock()
+        self._items: OrderedDict[tuple[int, float, int, int], StereoRectifier] = OrderedDict()
+
+    def get(
+        self,
+        calibration: StereoRgbCalibration,
+        *,
+        alpha: float,
+        image_size: tuple[int, int],
+        ops: MatOps,
+    ) -> StereoRectifier:
+        size = (int(image_size[0]), int(image_size[1]))
+        key = (id(calibration), float(alpha), size[0], size[1])
+        with self._lock:
+            rectifier = self._items.get(key)
+            # The entry keeps its calibration alive, so a matching id() really
+            # is the same object; the identity check is belt and braces.
+            if rectifier is not None and rectifier.calibration is calibration:
+                self._items.move_to_end(key)
+                return rectifier
+            rectifier = StereoRectifier(calibration, alpha=alpha, ops=ops)
+            # Build the maps now, under the lock, so the cached object is
+            # never mutated again and can be shared between worker threads.
+            rectifier.make(size)
+            self._items[key] = rectifier
+            self._items.move_to_end(key)
+            while len(self._items) > self._max_entries:
+                self._items.popitem(last=False)
+            return rectifier
 
     def clear(self) -> None:
         with self._lock:
@@ -375,6 +425,18 @@ class _PcdInputs:
     right: np.ndarray
     read_ms: float
 
+def _sync_device(entry: _BackendEntry) -> None:
+    """
+    Wait for queued CUDA work so each stage timer covers its own stage.
+
+    CUDA calls return before the GPU has finished. Without this, unfinished
+    work is charged to whichever later stage first copies data to the CPU
+    (usually the PCD write). The work has to finish before the job can end
+    anyway, so this does not add to the total time.
+    """
+    if entry.device_label.startswith('cuda:'):
+        torch.cuda.synchronize(int(entry.device_label.split(':', 1)[1]))
+
 # --- PCD calculator ---
 
 class PcdCalculator:
@@ -385,8 +447,14 @@ class PcdCalculator:
     This class is only orchestration and timing.
     """
 
-    def __init__(self, *, calibrations: PcdCalibrationCache) -> None:
+    def __init__(
+        self,
+        *,
+        calibrations: PcdCalibrationCache,
+        rectifiers: PcdRectifierCache | None = None,
+    ) -> None:
         self.calibrations = calibrations
+        self.rectifiers = rectifiers or PcdRectifierCache()
         self.numpy_ops = NumpyMatOps()
 
     def read_inputs(self, *, rgb_path: Path, left_path: Path, right_path: Path) -> _PcdInputs:
@@ -440,11 +508,18 @@ class PcdCalculator:
         )
         timing.calibration_ms = (time.perf_counter() - t0) * 1000.0
         t0 = time.perf_counter()
-        rectifier = StereoRectifier(calibration, alpha=request.alpha, ops=ops)
+        rectifier = self.rectifiers.get(
+            calibration,
+            alpha=request.alpha,
+            image_size=(int(stereo_w), int(stereo_h)),
+            ops=ops,
+        )
         left_rectified, right_rectified, rectification = rectifier.rectify(left, right)
+        _sync_device(entry)
         timing.rectify_ms = (time.perf_counter() - t0) * 1000.0
         t0 = time.perf_counter()
         disparity = entry.predictor.predict(left_rectified, right_rectified)
+        _sync_device(entry)
         timing.disparity_ms = (time.perf_counter() - t0) * 1000.0
         t0 = time.perf_counter()
         points_rectified, _pixels = rectification.disparity_to_points_rectified(
@@ -457,6 +532,7 @@ class PcdCalculator:
         if ops.shape(points_rectified)[0] == 0:
             raise RuntimeError('No valid 3D points')
         points_left = rectified_left_to_original_left(points_rectified, rectification)
+        _sync_device(entry)
         timing.points_ms = (time.perf_counter() - t0) * 1000.0
         t0 = time.perf_counter()
         uv, points_left = project_points_to_rgb_pixels(
@@ -472,8 +548,10 @@ class PcdCalculator:
         u = ops.astype_int64(ops.round(uv[:, 0]))
         v = ops.astype_int64(ops.round(uv[:, 1]))
         colors_rgb = rgb8(rgb[v, u, :3], order='RGB', ops=ops)
+        _sync_device(entry)
         timing.projection_ms = (time.perf_counter() - t0) * 1000.0
         segments: list[PcdSegment] = []
+        manifest: list[dict[str, Any]] = []
 
         if detections_path is None:
             t0 = time.perf_counter()
@@ -494,15 +572,19 @@ class PcdCalculator:
             if not isinstance(detections_json, dict):
                 raise ValueError('detections JSON must contain an object')
             # Segmentation uses NumPy/OpenCV, so move this stage back to CPU.
+            # Only the per-point data is copied: the colours were already
+            # sampled above, so the full RGB image stays where it is.
             points_np = ops.to_numpy(points_left)
             uv_np = ops.to_numpy(uv)
-            rgb_np = ops.to_numpy(rgb)
+            colors_np = ops.to_numpy(colors_rgb)
             manifest = split_cloud_uv(
                 points_np,
                 uv_np,
-                rgb_np,
+                None,
                 detections_json,
                 segments_output_dir,
+                colors_rgb=colors_np,
+                image_size=(int(rgb_w), int(rgb_h)),
                 rgb_image_color_order='RGB',
                 min_points=request.min_segment_points,
                 erode_pixels=request.erode_pixels,
@@ -534,8 +616,12 @@ class PcdCalculator:
             + timing.segmentation_ms
             + timing.write_single_ms
         )
-        Path(str(segments_output_dir) + ".json").write_text(json.dumps(
-                        dict(detections=manifest,timing=timing.model_dump())))
+        # The segment manifest only exists when segmentation ran. Writing it
+        # unconditionally raised NameError (and targeted "None.json") for
+        # builds without detections, after their PCD had been written.
+        if detections_path is not None and segments_output_dir is not None:
+            Path(str(segments_output_dir) + ".json").write_text(json.dumps(
+                            dict(detections=manifest,timing=timing.model_dump())))
         return PcdBuildResult(
             **request.model_dump(),
             backend_used=entry.backend,
@@ -584,8 +670,11 @@ class PcdWorker(
             source_translation_unit=calibration_translation_unit
         )
 
+        self.rectifiers = PcdRectifierCache()
+
         self.calculator = PcdCalculator(
-            calibrations=self.calibrations
+            calibrations=self.calibrations,
+            rectifiers=self.rectifiers,
         )
 
         self._read_root = normalize_root(read_root)
@@ -655,6 +744,7 @@ class PcdWorker(
 
     def cleanup(self) -> None:
         self.backends.clear()
+        self.rectifiers.clear()
         self.calibrations.clear()
 
 

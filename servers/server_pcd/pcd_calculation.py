@@ -234,8 +234,18 @@ class StereoRectification:
         self, disparity: ArrayLike, *, min_disparity: float = 0.5,
         min_depth_m: float | None = 0.01, max_depth_m: float | None = 10.0,
         stride: int = 1, mask: ArrayLike | None = None,
+        point_dtype: Any | None = None,
     ) -> tuple[ArrayLike, ArrayLike]:
+        """Back-project a disparity map to Nx3 points in the rectified-left frame.
+
+        Points are returned as float32 by default: the math below already runs
+        in float32 and PCD files store float32, so widening to float64 only
+        doubled memory, GPU work and the GPU->CPU copy. Pass
+        ``point_dtype=ops.float64`` to get the previous behaviour.
+        """
         ops = self.ops
+        if point_dtype is None:
+            point_dtype = ops.float32
         if ops.ndim(disparity) != 2:
             raise ValueError(f'disparity must be HxW, got {ops.shape(disparity)}')
         if stride < 1:
@@ -253,7 +263,7 @@ class StereoRectification:
             valid = ops.logical_and(valid, sample != 0)
         y, x = ops.nonzero(valid)
         if ops.numel(x) == 0:
-            return (ops.zeros((0, 3), dtype=ops.float64), ops.zeros((0, 2), dtype=ops.int32))
+            return (ops.zeros((0, 3), dtype=point_dtype), ops.zeros((0, 2), dtype=ops.int32))
         disp = d[y, x]
         xf = ops.astype_float32(x)
         yf = ops.astype_float32(y)
@@ -273,7 +283,7 @@ class StereoRectification:
 
         points = ops.stack((X, Y, Z), dim=1)
         pixels = ops.stack((x, y), dim=1)
-        points = ops.astype_float64(points)
+        points = ops.astype(points, point_dtype)
         pixels = ops.astype_int32(pixels)
         return (points, pixels)
 
@@ -399,16 +409,20 @@ class StereoRectifier:
         r = self.make((lw, lh))
         return (self.left_remapper.remap(left), self.right_remapper.remap(right), r)
 
+def _as_float_points(points: ArrayLike, ops: MatOps) -> ArrayLike:
+    """Keep the caller's floating dtype (float32 or float64); promote integers to float32."""
+    return points if ops.is_floating_point(points) else ops.astype_float32(points)
+
 def rectified_left_to_original_left(points_rectified_m: ArrayLike, rectification: StereoRectification) -> ArrayLike:
     ops:MatOps = rectification.ops
-    p = ops.astype_float64(points_rectified_m)
+    p = _as_float_points(points_rectified_m, ops)
     if ops.ndim(p) != 2 or ops.shape(p)[1] != 3:
         raise ValueError(f'points must be Nx3, got {ops.shape(p)}')
-    return ops.matmul(p, rectification.R1)
+    return ops.matmul(p, ops.astype(rectification.R1, ops.dtype(p)))
 
 def transform_points(points_m: ArrayLike, transform_4x4: ArrayLike, ops: MatOps) -> ArrayLike:
-    p = ops.astype_float64(points_m)
-    T = ops.astype_float64(transform_4x4)
+    p = _as_float_points(points_m, ops)
+    T = ops.astype(transform_4x4, ops.dtype(p))
     if ops.ndim(p) != 2 or ops.shape(p)[1] != 3:
         raise ValueError(f'points must be Nx3, got {ops.shape(p)}')
     if tuple(ops.shape(T)) != (4, 4):
@@ -421,12 +435,16 @@ def transform_points(points_m: ArrayLike, transform_4x4: ArrayLike, ops: MatOps)
 def project_camera_points_opencv_model(points_camera, K, distortion=None, *, dtype=None, ops:MatOps):
     """Project Nx3 camera-frame points using OpenCV's distortion model."""
     VALID_DISTORTION_SIZES = (4, 5, 8, 12, 14)
-    if dtype is None: dtype=ops.float32
     p = points_camera
     if ops.ndim(p) != 2 or ops.shape(p)[1] != 3:
         raise ValueError(f'points_camera must be Nx3, got {ops.shape(p)}')
     if ops.shape(K) != (3, 3):
         raise ValueError(f'K must be 3x3, got {ops.shape(K)}')
+    p = _as_float_points(p, ops)
+    # Run the whole projection in the points' dtype so nothing is silently
+    # promoted back to float64 by the calibration matrices.
+    if dtype is None: dtype = ops.dtype(p)
+    K = ops.astype(K, ops.dtype(p))
     x, y = (p[:, 0] / p[:, 2], p[:, 1] / p[:, 2])
     if distortion is not None:
         src = ops.reshape(distortion, (-1,))
@@ -508,23 +526,60 @@ def read_image(path, ops:MatOps, color: Literal["RGB", "BGR", "gray"]="BGR"):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     return ops.from_numpy(image)
 
-def save_pcd(path: str | Path, points_m, colors_rgb, *, ops: MatOps=NumpyMatOps(), binary=True):
+def pack_pcd_records(points_m, colors_rgb, *, ops: MatOps=NumpyMatOps()) -> np.ndarray:
+    """Pack Nx3 points and Nx3 uint8 RGB colours into the on-disk PCD layout.
+
+    Returns a C-contiguous Nx4 little-endian float32 array ``(x, y, z, rgb)``
+    where ``rgb`` holds the PCL packed colour bits. Build it once per cloud;
+    any subset of rows (``records[index]``) can then be written directly
+    without converting or re-packing anything.
+    """
+    ps = np.asarray(ops.to_numpy(points_m))
+    cs = np.asarray(ops.to_numpy(colors_rgb))
+    if ps.ndim != 2 or ps.shape[1] < 3:
+        raise ValueError(f"points must be Nx3, got {ps.shape}")
+    if cs.ndim != 2 or cs.shape[1] < 3:
+        raise ValueError(f"colors must be Nx3, got {cs.shape}")
+    if len(ps) != len(cs):
+        raise ValueError(f"points and colors must have same length, got {len(ps)} and {len(cs)}")
+    records = np.empty((len(ps), 4), dtype="<f4")
+    records[:, :3] = ps[:, :3]
+    packed = cs[:, 0].astype("<u4")
+    packed <<= 8
+    packed |= cs[:, 1]
+    packed <<= 8
+    packed |= cs[:, 2]
+    records.view("<u4")[:, 3] = packed
+    return records
+
+_PCD_ASCII_ROW = "%.8f %.8f %.8f %.9e\n"
+_PCD_ASCII_CHUNK = 65536
+
+def write_pcd_records(path: str | Path, records: np.ndarray, *, binary=True) -> Path:
+    """Write records produced by :func:`pack_pcd_records` as a .pcd file."""
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
-    ps, cs = ops.to_numpy(points_m), colors_rgb
-    rgb, n = rgb_float(cs,ops=ops), len(ps)
+    if records.ndim != 2 or records.shape[1] != 4:
+        raise ValueError(f"records must be Nx4, got {records.shape}")
+    records = np.ascontiguousarray(records, dtype="<f4")
+    n = len(records)
     header = ("# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\nFIELDS x y z rgb\n"
               "SIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\n"
               f"WIDTH {n}\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS {n}\nDATA {'binary' if binary else 'ascii'}\n")
     if binary:
-        data = np.empty(n, dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("rgb", "<f4")])
-        data["x"], data["y"], data["z"], data["rgb"] = ps[:, 0], ps[:, 1], ps[:, 2], rgb
         with path.open("wb") as f:
-            f.write(header.encode("ascii")); data.tofile(f)
+            f.write(header.encode("ascii")); records.tofile(f)
     else:
         with path.open("w", encoding="ascii") as f:
             f.write(header)
-            f.writelines(f"{x:.8f} {y:.8f} {z:.8f} {float(r):.9e}\n" for (x, y, z), r in zip(ps, rgb))
+            # One C-level format call per chunk instead of one Python-level
+            # format per point.
+            for start in range(0, n, _PCD_ASCII_CHUNK):
+                block = records[start:start + _PCD_ASCII_CHUNK]
+                f.write((_PCD_ASCII_ROW * len(block)) % tuple(block.ravel().tolist()))
     return path
+
+def save_pcd(path: str | Path, points_m, colors_rgb, *, ops: MatOps=NumpyMatOps(), binary=True):
+    return write_pcd_records(path, pack_pcd_records(points_m, colors_rgb, ops=ops), binary=binary)
 
 def safe_name(value: str) -> str: return re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()) or "object"
 
@@ -554,6 +609,69 @@ def detection_mask(detection: dict[str, Any], height: int, width: int) -> np.nda
             cv2.fillPoly(mask, contours, value)
     return mask.astype(bool)
 
+def detection_mask_roi(
+    detection: dict[str, Any], height: int, width: int, *, pad: int = 0,
+    scratch: np.ndarray | None = None,
+) -> tuple[np.ndarray, int, int] | None:
+    """Rasterise one detection and return only its bounding-box crop.
+
+    Returns ``(mask, x0, y0)`` where ``mask`` is a uint8 crop equal to
+    ``detection_mask(...)[y0:y0 + h, x0:x0 + w]`` and every pixel outside the
+    crop is zero, or ``None`` when the detection covers no pixel. ``pad`` adds
+    a margin (clipped to the image) so the crop can be eroded with the same
+    result as eroding the full-frame mask.
+
+    Polygons are drawn at their original image coordinates (cv2.fillPoly is
+    not exactly shift-invariant, so drawing into a shifted crop could change
+    boundary pixels). ``scratch`` is an all-zero ``(height, width)`` uint8
+    buffer to draw into; the returned polygon mask is then a *view* into it
+    and the caller must reset it (``mask[...] = 0``) before reusing the
+    buffer. Drawing and resetting cost is proportional to the detection, not
+    to the frame. Without ``scratch`` a temporary buffer is allocated.
+    """
+    mask_info = detection.get("mask") or {}
+    solid: list[np.ndarray] = []
+    holes: list[np.ndarray] = []
+    if mask_info.get("format") != "polygon":
+        bbox = detection.get("bbox_xyxy")
+        if bbox is None or len(bbox) != 4:
+            return None
+        x1, y1 = np.floor(bbox[:2]).astype(int)
+        x2, y2 = np.ceil(bbox[2:]).astype(int)
+        x1, x2 = np.clip((x1, x2), 0, width)
+        y1, y2 = np.clip((y1, y2), 0, height)
+    else:
+        for polygon in mask_info.get("polygons", []):
+            points = np.asarray(polygon.get("points_xy", []), np.float32)
+            if len(points) >= 3:
+                contour = np.rint(points).astype(np.int32)
+                (holes if bool(polygon.get("is_hole", False)) else solid).append(contour)
+        if not solid:
+            return None
+        lo = np.min([c.min(axis=0) for c in solid], axis=0)
+        hi = np.max([c.max(axis=0) for c in solid], axis=0)
+        x1, y1 = max(int(lo[0]), 0), max(int(lo[1]), 0)
+        x2, y2 = min(int(hi[0]) + 1, width), min(int(hi[1]) + 1, height)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+    pad = max(0, int(pad))
+    x0, y0 = max(x1 - pad, 0), max(y1 - pad, 0)
+    x3, y3 = min(x2 + pad, width), min(y2 + pad, height)
+    if solid:
+        if scratch is None:
+            scratch = np.zeros((height, width), np.uint8)
+        elif scratch.shape != (height, width) or scratch.dtype != np.uint8:
+            raise ValueError(f"scratch must be uint8 {(height, width)}, got {scratch.dtype} {scratch.shape}")
+        cv2.fillPoly(scratch, solid, 1)
+        if holes:
+            cv2.fillPoly(scratch, holes, 0)
+        mask = scratch[y0:y3, x0:x3]
+    else:
+        mask = np.zeros((y3 - y0, x3 - x0), np.uint8)
+        mask[y1 - y0:y2 - y0, x1 - x0:x2 - x0] = 1
+    return mask, x0, y0
+
 def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
     detections_json: dict[str, Any],
     output_dir: str | Path,
@@ -566,8 +684,16 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
     save_full_cloud: bool = False,
     binary_pcd: bool = True,
     ops: MatOps=NumpyMatOps(),
+    colors_rgb: Any | None = None,
+    image_size: tuple[int, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Split a stereo 3D cloud using masks/detections in RGB-image coordinates."""
+    """Split a stereo 3D cloud using masks/detections in RGB-image coordinates.
+
+    ``colors_rgb`` (Nx3 uint8 RGB, one row per point) lets the caller pass
+    colours it has already sampled; ``rgb_image`` may then be ``None`` as long
+    as ``image_size=(width, height)`` of the RGB image is given. Without
+    ``colors_rgb`` the colours are sampled from ``rgb_image`` as before.
+    """
 
     if ops.shape(points_left)[0] == 0:
         raise RuntimeError("No 3D points project inside the RGB image")
@@ -578,17 +704,35 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
     if ops.shape(points_left)[0] != ops.shape(uv)[0]:
         raise ValueError(f"points_left and uv must have same length, got "
             f"{ops.shape(points_left)[0]} and {ops.shape(uv)[0]}")
-    if ops.ndim(rgb_image) != 3 or ops.shape(rgb_image)[2] < 3:
-        raise ValueError(f"rgb_image must be HxWx3, got {ops.shape(rgb_image)}")
-    rgb_h, rgb_w = ops.shape(rgb_image)[:2]
+    if rgb_image is not None:
+        if ops.ndim(rgb_image) != 3 or ops.shape(rgb_image)[2] < 3:
+            raise ValueError(f"rgb_image must be HxWx3, got {ops.shape(rgb_image)}")
+        rgb_h, rgb_w = (int(x) for x in ops.shape(rgb_image)[:2])
+        if image_size is not None and (int(image_size[0]), int(image_size[1])) != (rgb_w, rgb_h):
+            raise ValueError(f"image_size {tuple(image_size)} differs from RGB image size {(rgb_w, rgb_h)}")
+    elif colors_rgb is not None and image_size is not None:
+        rgb_w, rgb_h = int(image_size[0]), int(image_size[1])
+    else:
+        raise ValueError("rgb_image is required unless both colors_rgb and image_size are given")
     detection_size = (int(detections_json["image_width"]),int(detections_json["image_height"]))
     if (rgb_w, rgb_h) != detection_size:
         raise ValueError(f"RGB image size {(rgb_w, rgb_h)} differs from "
             f"detection size {detection_size}")
-    
+
     u = ops.astype_int64(ops.round(uv[:, 0]))
     v = ops.astype_int64(ops.round(uv[:, 1]))
-    colors_rgb = rgb8(rgb_image[v, u, :3], order=rgb_image_color_order, ops=ops)
+    if colors_rgb is None:
+        colors_rgb = rgb8(rgb_image[v, u, :3], order=rgb_image_color_order, ops=ops)
+    elif ops.shape(colors_rgb)[0] != ops.shape(points_left)[0]:
+        raise ValueError(f"points_left and colors_rgb must have same length, got "
+            f"{ops.shape(points_left)[0]} and {ops.shape(colors_rgb)[0]}")
+
+    # Everything below is NumPy/OpenCV. Convert and pack the cloud exactly
+    # once; each output file is then just a row selection of `records`.
+    records = pack_pcd_records(points_left, colors_rgb, ops=ops)
+    u = np.asarray(ops.to_numpy(u)).astype(np.int32, copy=False)
+    v = np.asarray(ops.to_numpy(v)).astype(np.int32, copy=False)
+    num_points = len(records)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -597,37 +741,42 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
     if exclusive:
         detections.sort(key=lambda item: float(item[1].get("confidence", 0)), reverse=True)
 
-    kernel = None
-    if erode_pixels > 0:
-        radius = int(erode_pixels)
-        kernel = np.ones((2 * radius + 1, 2 * radius + 1), np.uint8)
+    radius = max(0, int(erode_pixels))
+    kernel = np.ones((2 * radius + 1, 2 * radius + 1), np.uint8) if radius > 0 else None
 
-    claimed = np.zeros(len(points_left), dtype=bool)
-    union = np.zeros(len(points_left), dtype=bool)
+    claimed = np.zeros(num_points, dtype=bool)
+    union = np.zeros(num_points, dtype=bool)
     manifest: list[dict[str, Any]] = []
+    # One frame-sized buffer shared by all detections; each detection only
+    # touches (and afterwards clears) its own bounding box.
+    scratch = np.zeros((rgb_h, rgb_w), np.uint8)
 
     LOG.info(f"saving to dir {output_dir}")
     filenames = []
 
     for detection_index, detection in detections:
-        mask = detection_mask(detection, rgb_h, rgb_w)
-        if mask.shape != (rgb_h, rgb_w):
-            raise ValueError(
-                f"Detection {detection_index} mask has shape {mask.shape}, expected {(rgb_h, rgb_w)}"
-            )
-        if kernel is not None:
-            mask = ops.from_numpy(cv2.erode(mask.astype(np.uint8), kernel).astype(bool))
+        # Work on the detection's bounding box only instead of allocating,
+        # eroding and indexing a full RGB-resolution mask per detection.
+        roi = detection_mask_roi(detection, rgb_h, rgb_w, pad=radius, scratch=scratch)
+        if roi is None:
+            covered = np.empty(0, dtype=np.intp)
+        else:
+            drawn, x0, y0 = roi
+            mask = cv2.erode(drawn, kernel) if kernel is not None else drawn
+            roi_h, roi_w = mask.shape
+            in_roi = np.flatnonzero((u >= x0) & (u < x0 + roi_w) & (v >= y0) & (v < y0 + roi_h))
+            covered = in_roi[mask[v[in_roi] - y0, u[in_roi] - x0] != 0]
+            drawn[...] = 0  # leave the shared buffer clean for the next detection
 
-        covered = mask[v, u]
-        union |= covered
-        keep = covered & ~claimed if exclusive else covered
-        count = int(keep.sum())
+        union[covered] = True
+        keep = covered[~claimed[covered]] if exclusive else covered
+        count = int(len(keep))
 
         if count < min_points:
             LOG.info(f"skip detection {detection_index}: {count} points ({detection.get('class_name', 'unknown')})")
             continue
         if exclusive:
-            claimed |= keep
+            claimed[keep] = True
 
         class_id = int(detection.get("class_id", -1))
         class_name = str(detection.get("class_name", "object"))
@@ -637,7 +786,7 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
             f"{confidence:.3f}_{count}pts.pcd"
         )
 
-        save_pcd(output_dir / filename, points_left[keep], colors_rgb[keep], binary=binary_pcd)
+        write_pcd_records(output_dir / filename, records[keep], binary=binary_pcd)
         manifest.append({
             "detection_index": detection_index,
             "class_id": class_id,
@@ -653,19 +802,12 @@ def split_cloud_uv(points_left: Any, uv: Any, rgb_image: Any,
         count = int(background.sum())
         if count:
             filename = f"background_{count}pts.pcd"
-            save_pcd(
-                output_dir / filename,
-                points_left[background],
-                colors_rgb[background],
-                binary=binary_pcd,
-            )
-            # LOG.info(f"saved background")
+            write_pcd_records(output_dir / filename, records[background], binary=binary_pcd)
             filenames.append(filename)
 
     if save_full_cloud:
         filename = f"full.pcd"
-        save_pcd(output_dir / filename, points_left, colors_rgb, binary=binary_pcd)
-        # LOG.info(f"saved {filename} ({len(points_left)} points)")
+        write_pcd_records(output_dir / filename, records, binary=binary_pcd)
         filenames.append(filename)
 
     LOG.info(f"saved {filenames}")
