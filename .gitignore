@@ -19,3 +19,4 @@ run_rgbd_right.bat
 /rgbd_hand_pcd_debug
 /.vscode
 *.pcd
+/tmp

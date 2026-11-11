@@ -81,6 +81,22 @@ SERVICES = [
 ]
 
 
+try:
+    import mstore
+    from turbojpeg import TJPF_RGB, TJSAMP_420, TurboJPEG
+    tj = TurboJPEG()
+    SERVICES.append(
+        Service(
+            "mstore",
+            [
+                "uv", "run", "mstore-server",
+            ],
+        )
+    )
+except:
+    print(f"skip mstore")
+
+
 def main() -> None:
     env = os.environ.copy()
     env["LOG_REDIS_URL"] = "redis://127.0.0.1:6379/0"

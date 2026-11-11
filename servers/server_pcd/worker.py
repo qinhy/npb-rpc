@@ -34,12 +34,12 @@ from servers.server_pcd.pcd_calculation import (
     StereoRgbCalibration,
     StereoRectifier,
     project_points_to_rgb_pixels,
-    read_image,
     rectified_left_to_original_left,
     rgb8,
     save_pcd,
     split_cloud_uv,
 )
+from servers.imread_utils import read_image
 from servers.msg.worker import Worker, JobStore
 
 

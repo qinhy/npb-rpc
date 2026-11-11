@@ -44,33 +44,6 @@ def _tilt_matrix(tau_x, tau_y, *, ops: MatOps, dtype):
     pz[0, 2], pz[1, 2] = (-r[0, 2], -r[1, 2])
     return ops.matmul(pz, r)
 
-def gray8(image: ArrayLike, *, ops: MatOps) -> ArrayLike:
-    """Convert a BGR/BGRA image to 8-bit grayscale."""
-    a = image
-    src_dtype = DataType.which(ops.dtype(a), strict=False)
-    converted_color = False
-    if ops.ndim(a) == 3 and ops.shape(a)[2] >= 3:
-        b, g, r = (a[:, :, 0], a[:, :, 1], a[:, :, 2])
-        a = 0.114 * b + 0.587 * g + 0.299 * r
-        converted_color = True
-    elif ops.ndim(a) == 3 and ops.shape(a)[2] == 1:
-        a = a[:, :, 0]
-    elif ops.ndim(a) != 2:
-        raise ValueError(f'Unsupported image shape: {ops.shape(a)}')
-    if src_dtype == DataType.UINT8:
-        if converted_color:
-            return ops.astype_uint8(ops.clip(ops.round(a), 0, 255))
-        return a
-    if src_dtype == DataType.UINT16 and converted_color:
-        a = ops.round(a)
-    if ops.is_floating_point(a) and ops.numel(a) and (_scalar(ops.nanmax(a), ops) <= 1):
-        a = a * 255
-    if src_dtype == DataType.UINT16 and ops.numel(a):
-        max_value = _scalar(ops.max(a, dim=None), ops)
-        if max_value > 0:
-            a = ops.astype_float32(a) * (255 / max_value)
-    return ops.astype_uint8(ops.clip(a, 0, 255))
-
 def rgb8(colors: ArrayLike, order: ColorOrder = 'RGB', *, ops: MatOps) -> ArrayLike:
     """Convert Nx3-like colors to uint8 RGB/BGR."""
     a = colors
@@ -86,13 +59,6 @@ def rgb_float(colors_rgb8, ops: MatOps):
     colors_rgb8 = ops.to_numpy(colors_rgb8)
     packed = (colors_rgb8[:, 0].astype(np.uint32) << 16) | (colors_rgb8[:, 1].astype(np.uint32) << 8) | colors_rgb8[:, 2].astype(np.uint32)
     return packed.astype("<u4").view("<f4")
-
-def read_image(path: str | Path, *, color: bool = True, ops: MatOps = NumpyMatOps()):
-    """Read an image from disk; grayscale output uses the selected MatOps backend."""
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR if color else cv2.IMREAD_UNCHANGED)
-    if image is None:
-        raise FileNotFoundError(f'Could not read image: {path}')
-    return image if color else gray8(ops.from_numpy(image), ops=ops)
 
 DEFAULT_CALIBRATION: dict[str, Any] = {'rgb_resolution': [4056, 3040],
  'left_resolution': [1280, 800],
@@ -515,16 +481,6 @@ def build_rgb_indexed_cloud(
         rgb_image_is_undistorted=rgb_image_is_undistorted,
     )
     return points_left,uv
-
-def read_image(path, ops:MatOps, color: Literal["RGB", "BGR", "gray"]="BGR"):
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise FileNotFoundError(f"Could not read image: {path}")
-    if color == "RGB":
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    if color == "gray":
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    return ops.from_numpy(image)
 
 def pack_pcd_records(points_m, colors_rgb, *, ops: MatOps=NumpyMatOps()) -> np.ndarray:
     """Pack Nx3 points and Nx3 uint8 RGB colours into the on-disk PCD layout.

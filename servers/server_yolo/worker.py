@@ -29,13 +29,12 @@ from servers.server_yolo.yolo_utils import (
     normalize_root,
     precision_args,
     prepare_yolo_batch,
-    read_jpeg_tensor,
     resolve_path,
     write_json_atomic,
     torch_device,
     yolo_device,
 )
-
+from servers.imread_utils import read_jpeg_tensor
 from servers.msg.worker import Worker
 
 LOG = logging.getLogger(__name__.replace(".",":"))

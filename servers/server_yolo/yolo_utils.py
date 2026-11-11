@@ -11,7 +11,6 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torchvision.io import ImageReadMode, decode_jpeg, read_file
 from ultralytics.utils.downloads import (
     GITHUB_ASSETS_NAMES,
     GITHUB_ASSETS_STEMS,
@@ -64,49 +63,6 @@ class TileInput:
 # ============================================================
 
 
-def read_jpeg(path: Path) -> np.ndarray:
-    if path.suffix.lower() not in {".jpg", ".jpeg"}:
-        raise ValueError(f"input image must be JPEG: {path}")
-
-    encoded = np.fromfile(path, dtype=np.uint8)
-    if encoded.size == 0:
-        raise ValueError(f"input JPEG is empty: {path}")
-
-    image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError(f"failed to decode JPEG: {path}")
-    return image
-
-
-def read_jpeg_tensor(path: Path, device: torch.device | str) -> torch.Tensor:
-    """Decode JPEG to CHW RGB uint8 directly on *device* when supported."""
-    if path.suffix.lower() not in {".jpg", ".jpeg"}:
-        raise ValueError(f"input image must be JPEG: {path}")
-
-    device = torch.device(device)
-    encoded = read_file(str(path))
-    if encoded.numel() == 0:
-        raise ValueError(f"input JPEG is empty: {path}")
-
-    try:
-        image = decode_jpeg(
-            encoded,
-            mode=ImageReadMode.RGB,
-            device=device,
-        )
-    except RuntimeError:
-        if device.type != "cuda":
-            raise
-        # Some torchvision builds do not include CUDA/nvJPEG support.
-        image = decode_jpeg(
-            encoded,
-            mode=ImageReadMode.RGB,
-            device="cpu",
-        ).to(device, non_blocking=True)
-
-    if image.ndim != 3 or image.shape[0] != 3:
-        raise ValueError(f"expected decoded RGB CHW image, got shape={tuple(image.shape)}")
-    return image.contiguous()
 
 
 def effective_roi(

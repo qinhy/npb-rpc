@@ -1343,6 +1343,7 @@ dev = [
     { name = "opencv-python" },
     { name = "pynng" },
     { name = "pytest" },
+    { name = "pyturbojpeg" },
     { name = "pyzmq" },
     { name = "redis" },
     { name = "rich" },
@@ -1382,6 +1383,7 @@ dev = [
     { name = "opencv-python", specifier = ">=5.0.0.93" },
     { name = "pynng", specifier = ">=0.9,<1" },
     { name = "pytest", specifier = ">=8" },
+    { name = "pyturbojpeg", specifier = ">=2.6.1" },
     { name = "pyzmq", specifier = ">=27.0" },
     { name = "redis", specifier = ">=8.1.0" },
     { name = "rich", specifier = ">=15.0.0" },
@@ -2264,6 +2266,19 @@ dependencies = [
     { name = "ws4py" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/94/80/57c61ed3a7cab01618290ee48f173da9fb8671f2dc90e8a9c8d25ed44456/python-ddp-0.1.5.tar.gz", hash = "sha256:1420f23e89c4ac378ba2f4b311ddcd032e0f0af4f79f8b0829cfad972d2e588f", size = 6032, upload-time = "2015-04-04T00:59:05.032Z" }
+
+[[package]]
+name = "pyturbojpeg"
+version = "2.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/62/f4/0893b94338bec41743d9ec22a49f256db8ae123b920a223169101da506e2/pyturbojpeg-2.6.1.tar.gz", hash = "sha256:94c2c81a1d46534df8eeb49b0c760982683d0707eb09c7b02bdf61ad7e048d99", size = 112363, upload-time = "2026-10-24T05:25:42.11Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/9e/a19c44e18f999dacba7d309a06f2e89687569330051b82d42327a5fab714/pyturbojpeg-2.6.1-py3-none-any.whl", hash = "sha256:2e3b992b708c2ccb316853f1b0ab43a89218fec10af0a2fbbda266a7a72b36d1", size = 37374, upload-time = "2026-10-24T05:25:40.623Z" },
+]
 
 [[package]]
 name = "pyyaml"
